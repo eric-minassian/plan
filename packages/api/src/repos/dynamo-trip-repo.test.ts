@@ -12,10 +12,14 @@ import { Effect, Either } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   accumulateActivePage,
+  domainItemToDynamo,
+  dynamoItemToDomain,
   encodeCursor,
+  itemSk,
   itemToTrip,
   makeDynamoTripRepo,
   parseListCursor,
+  tripItemsPk,
   tripSk,
   userPk,
   type TripItem,
@@ -397,5 +401,34 @@ describe("itemToTrip", () => {
     const t = itemToTrip(tripItem("o", "x"));
     expect(t.tripId).toBe("x");
     expect(t.ownerId).toBe("o");
+  });
+});
+
+describe("domainItemToDynamo / dynamoItemToDomain", () => {
+  it("round-trips note item with SK=ITEM#itemId and sortKey attribute", () => {
+    const domain = {
+      itemId: "item-1",
+      tripId: "trip-1",
+      type: "note" as const,
+      title: "Hello",
+      details: {},
+      sortKey: 2000,
+      version: 1,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+      notes: "body",
+    };
+    const row = domainItemToDynamo("owner-1", domain);
+    expect(row.PK).toBe(tripItemsPk("trip-1"));
+    expect(row.SK).toBe(itemSk("item-1"));
+    expect(row.SK).toBe("ITEM#item-1");
+    expect(row.sortKey).toBe(2000);
+    expect(row.ownerId).toBe("owner-1");
+    expect(row.entityType).toBe("ITEM");
+    const back = dynamoItemToDomain(row);
+    expect(back.itemId).toBe("item-1");
+    expect(back.sortKey).toBe(2000);
+    expect(back.type).toBe("note");
+    expect(back.notes).toBe("body");
   });
 });

@@ -138,7 +138,7 @@ paths:
       tags: [Owner]
       summary: Get trip meta + items
       description: |
-        Returns trip metadata and items array (items empty until itinerary PR).
+        Returns trip metadata and items ordered by `sortKey` ascending.
         Soft-deleted trips return 404.
       security:
         - ownerBearer: []
@@ -233,7 +233,7 @@ paths:
       operationId: exportTrip
       tags: [Owner]
       summary: Export trip JSON
-      description: Portability payload — trip meta + items (items empty until itinerary PR).
+      description: Portability payload — trip meta + items ordered by sortKey.
       security:
         - ownerBearer: []
       responses:
@@ -251,6 +251,166 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/trips/{tripId}/items:
+    parameters:
+      - $ref: "#/components/parameters/tripId"
+    post:
+      operationId: createItem
+      tags: [Owner]
+      summary: Create itinerary item
+      description: |
+        Create a discriminated itinerary item. Server assigns `itemId`, `sortKey`
+        (append at end, gap 1000), `version: 1`, and timestamps.
+        Hard limit: 100 items per trip. Optional `Idempotency-Key` (max 128 chars).
+      security:
+        - ownerBearer: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: Optional create idempotency key (24h TTL)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateItineraryItem"
+            example:
+              type: flight
+              title: UA 100 SFO → JFK
+              startAt: "2026-09-12T08:00:00-07:00"
+              endAt: "2026-09-12T16:35:00-04:00"
+              details:
+                flightNumber: "100"
+                airlineCode: UA
+      responses:
+        "201":
+          description: Item created
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Item version (e.g. `"1"`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItineraryItem"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/trips/{tripId}/items/reorder:
+    parameters:
+      - $ref: "#/components/parameters/tripId"
+    post:
+      operationId: reorderItems
+      tags: [Owner]
+      summary: Reorder itinerary items
+      description: |
+        Full permutation reorder. Requires `If-Match` on **trip** version (trip-level lock).
+        Assigns `sortKey = (index + 1) * 1000`, bumps trip version first, then updates
+        items in chunks of ≤25. Body `expectedVersion` is rejected.
+      security:
+        - ownerBearer: []
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Current trip version, e.g. `"1"`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderItems"
+      responses:
+        "200":
+          description: Trip with reordered items
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: New trip version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/trips/{tripId}/items/{itemId}:
+    parameters:
+      - $ref: "#/components/parameters/tripId"
+      - $ref: "#/components/parameters/itemId"
+    patch:
+      operationId: patchItem
+      tags: [Owner]
+      summary: Update itinerary item
+      description: |
+        Requires `If-Match` with the current **item** version. `type` is immutable
+        (reject if present). Body `expectedVersion` is rejected. `details` is full replace
+        when present. Version mismatch → 409.
+      security:
+        - ownerBearer: []
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Current item version, e.g. `"1"`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateItineraryItem"
+      responses:
+        "200":
+          description: Updated item
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItineraryItem"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteItem
+      tags: [Owner]
+      summary: Delete itinerary item
+      description: |
+        Deletes the item row. Attachment cascade deferred to attachments PR.
+      security:
+        - ownerBearer: []
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     ownerBearer:
@@ -263,6 +423,12 @@ components:
   parameters:
     tripId:
       name: tripId
+      in: path
+      required: true
+      schema:
+        type: string
+    itemId:
+      name: itemId
       in: path
       required: true
       schema:
@@ -390,8 +556,162 @@ components:
           properties:
             items:
               type: array
-              items: {}
-              description: Itinerary items (empty until items PR)
+              items:
+                $ref: "#/components/schemas/ItineraryItem"
+              description: Itinerary items ordered by sortKey ascending
+    ItemType:
+      type: string
+      enum:
+        - flight
+        - train
+        - hotel
+        - transport
+        - activity
+        - ticket
+        - note
+        - custom
+    CreateItineraryItem:
+      type: object
+      required: [type, title, details]
+      description: |
+        Discriminated create DTO. Omits server fields (itemId, tripId, sortKey,
+        version, createdAt, updatedAt). Instant fields accept RFC 3339 with zone.
+      properties:
+        type:
+          $ref: "#/components/schemas/ItemType"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        startAt:
+          type: string
+        endAt:
+          type: string
+        startTimeZone:
+          type: string
+        endTimeZone:
+          type: string
+        startLocation:
+          type: object
+          additionalProperties: true
+        endLocation:
+          type: object
+          additionalProperties: true
+        notes:
+          type: string
+          maxLength: 5000
+        confirmationCode:
+          type: string
+          maxLength: 64
+        enrichment:
+          type: object
+          additionalProperties: true
+        details:
+          type: object
+          additionalProperties: true
+          description: Type-specific details (must match `type`)
+    UpdateItineraryItem:
+      type: object
+      additionalProperties: false
+      description: |
+        Partial patch. Do not send `type` (immutable) or `expectedVersion` (use If-Match).
+        When `details` is present it fully replaces details for the stored type.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        startAt:
+          type: string
+        endAt:
+          type: string
+        startTimeZone:
+          type: string
+        endTimeZone:
+          type: string
+        startLocation:
+          type: object
+          additionalProperties: true
+        endLocation:
+          type: object
+          additionalProperties: true
+        notes:
+          type: string
+          maxLength: 5000
+        confirmationCode:
+          type: string
+          maxLength: 64
+        enrichment:
+          type: object
+          additionalProperties: true
+        details:
+          type: object
+          additionalProperties: true
+    ItineraryItem:
+      type: object
+      required:
+        - itemId
+        - tripId
+        - type
+        - title
+        - details
+        - sortKey
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        itemId:
+          type: string
+        tripId:
+          type: string
+        type:
+          $ref: "#/components/schemas/ItemType"
+        title:
+          type: string
+        startAt:
+          type: string
+        endAt:
+          type: string
+        startTimeZone:
+          type: string
+        endTimeZone:
+          type: string
+        startLocation:
+          type: object
+          additionalProperties: true
+        endLocation:
+          type: object
+          additionalProperties: true
+        notes:
+          type: string
+        confirmationCode:
+          type: string
+        sortKey:
+          type: number
+          description: Ordering attribute; never encoded in Dynamo SK
+        version:
+          type: integer
+          minimum: 1
+        enrichment:
+          type: object
+          additionalProperties: true
+        details:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    ReorderItems:
+      type: object
+      additionalProperties: false
+      required: [itemIds]
+      properties:
+        itemIds:
+          type: array
+          items:
+            type: string
+          description: Full permutation of all current item IDs for the trip
     TripListResponse:
       type: object
       additionalProperties: false
