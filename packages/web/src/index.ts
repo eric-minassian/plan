@@ -21,4 +21,13 @@ export {
   decodeTripListResponse,
   decodeTripResponse,
 } from "./api/decode.ts";
+export {
+  buildTripMapModel,
+  filterMapModel,
+  itemHasMapGeo,
+  mapTilerStyleUrl,
+  TripMapPanel,
+  type TripMapPanelProps,
+  type TripMapModel,
+} from "./map/index.ts";
 export const WEB_PACKAGE = "@tripplan/web" as const;

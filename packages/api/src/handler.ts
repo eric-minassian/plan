@@ -16,11 +16,6 @@ import {
   handleRequestAsync,
   type RouterDeps,
 } from "./router.js";
-import {
-  makeInMemoryAttachmentRepo,
-  type AttachmentRepository,
-} from "./repos/attachment-repo.js";
-import { makeDynamoAttachmentRepo } from "./repos/dynamo-attachment-repo.js";
 import { makeDynamoShareRepo } from "./repos/dynamo-share-repo.js";
 import { makeDynamoTripRepo } from "./repos/dynamo-trip-repo.js";
 import {
@@ -35,11 +30,6 @@ import {
   makeInMemoryUserRepo,
   type UserRepository,
 } from "./repos/user-repo.js";
-import {
-  makeMockDocsStore,
-  makeS3DocsStore,
-  type DocsStoreService,
-} from "./s3/docs-store.js";
 
 export interface HandlerOptions {
   readonly config?: ApiConfig;
@@ -47,8 +37,6 @@ export interface HandlerOptions {
   readonly userRepo?: UserRepository;
   readonly tripRepo?: TripRepository;
   readonly shareRepo?: ShareRepository;
-  readonly attachmentRepo?: AttachmentRepository;
-  readonly docsStore?: DocsStoreService;
   readonly logger?: Logger;
 }
 
@@ -56,10 +44,9 @@ export interface HandlerOptions {
  * Create a Lambda handler for API Gateway HTTP API (payload v2).
  * Owner JWT is verified in-process (no Cognito / APIGW JWT authorizer).
  *
- * Persistence: when `TABLE_NAME` is set, trips + shares + attachments use
- * DynamoDB single-table; otherwise in-memory (unit tests / local skeleton).
- * Documents: `DOCS_BUCKET_NAME` → real S3; otherwise in-memory mock.
- * User profiles remain in-memory until a Dynamo UserRepository lands.
+ * Persistence: when `TABLE_NAME` is set, trips + shares use DynamoDB single-table;
+ * otherwise in-memory (unit tests / local skeleton). User profiles remain
+ * in-memory until a Dynamo UserRepository lands.
  */
 export function createHandler(
   options: HandlerOptions = {},
@@ -79,20 +66,6 @@ export function createHandler(
     (useDynamo && tableName !== undefined
       ? makeDynamoShareRepo(tableName)
       : makeInMemoryShareRepo());
-  const attachmentRepo =
-    options.attachmentRepo ??
-    (useDynamo && tableName !== undefined
-      ? makeDynamoAttachmentRepo(tableName)
-      : makeInMemoryAttachmentRepo());
-  const docsBucketName = config.docsBucketName;
-  const docsStore =
-    options.docsStore ??
-    (docsBucketName !== undefined && docsBucketName.length > 0
-      ? makeS3DocsStore({
-          bucketName: docsBucketName,
-          region: config.awsRegion,
-        })
-      : makeMockDocsStore());
 
   const routeTable = buildRoutes(config);
 
@@ -133,8 +106,6 @@ export function createHandler(
       userRepo,
       tripRepo,
       shareRepo,
-      attachmentRepo,
-      docsStore,
       shareAuth,
       logger,
       routes: routeTable,

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="TripPlan">
+  <rect width="128" height="128" rx="28" fill="#0f1419"/>
+  <path
+    fill="#5b9fd4"
+    d="M64 22c-2.2 0-4 1.5-4.5 3.6L48 78h-9.5c-2.5 0-4 2.8-2.7 5l6.8 11.5c.7 1.2 2 2 3.4 2h40c1.4 0 2.7-.8 3.4-2L96.2 83c1.3-2.2-.2-5-2.7-5H84L68.5 25.6C68 23.5 66.2 22 64 22zm0 18.5 9.2 37.5H54.8L64 40.5z"
+  />
+  <circle cx="64" cy="98" r="6" fill="#5b9fd4"/>
+</svg>
