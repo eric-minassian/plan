@@ -39,4 +39,15 @@ pnpm test        # run package tests (when present)
 
 ## Development
 
-This repository is a greenfield scaffold. Application logic, UI, and infrastructure will land in follow-up PRs.
+### Web (`@tripplan/web`)
+
+Vite + React SPA shell. Runtime config is loaded from `/config.json` (see `packages/web/public/config.json`).
+
+```bash
+pnpm --filter @tripplan/web build
+
+# Local dev (optional): proxy /api to a deployed or local HTTP API
+# VITE_API_PROXY_TARGET=https://{api-id}.execute-api.us-east-1.amazonaws.com pnpm --filter @tripplan/web dev
+```
+
+Production hosting is CloudFront on **plan.ericminassian.com** (WebStack): SPA from S3, `/api/*` to API Gateway, CSP headers. Domain/cert details: [`packages/infra/README.md`](packages/infra/README.md).
