@@ -8,8 +8,8 @@ AWS CDK (v2) infrastructure for TripPlan. **All stacks deploy to `us-east-1`.**
 |-------|------------|----------|
 | **FoundationStack** | `TripPlan-Foundation-{stage}` | CloudWatch log retention defaults; Secrets Manager placeholders (AeroDataBox, MapTiler server key) |
 | **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle) |
-
-**Not in this package yet:** ApiStack, WebStack, ObservabilityStack.  
+| **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; routes `GET /api/v1/health` (public), `GET /api/v1/me` (owner JWT in-Lambda); env `TABLE_NAME` / `AUTH_ISSUER` / `AUTH_AUDIENCE` / `STAGE` / `PUBLIC_API_BASE_URL` (prod/staging). **Profile store is still in-memory** until Dynamo `UserRepository` lands — table R/W grant is preparatory. CORS: prod/staging SPA host only; localhost only on dev. |
+**Not in this package yet:** WebStack, ObservabilityStack.  
 **Never planned:** Cognito / AuthStack — owner auth is external OIDC ([eric-minassian/auth](https://github.com/eric-minassian/auth)).
 
 ## Requirements
@@ -59,6 +59,8 @@ Context: `-c stage=…` (defaults to `dev` in `cdk.json`). Only `dev`, `staging`
 | `DocumentsBucketName` / `DocumentsBucketArn` | S3 docs bucket |
 | `AeroDataBoxSecretArn` / `MapTilerSecretArn` | Secrets Manager ARNs |
 | `DefaultLogRetentionDays` | Stage default log retention (exported) |
+| `HttpApiUrl` | HTTP API base URL |
+| `ApiFunctionName` | API Lambda function name |
 
 ### Secrets (placeholders)
 

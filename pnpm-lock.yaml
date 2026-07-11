@@ -20,9 +20,15 @@ importers:
 
   packages/api:
     dependencies:
+      '@ericminassian/auth':
+        specifier: ^1.1.0
+        version: 1.1.0
       '@tripplan/domain':
         specifier: workspace:*
         version: link:../domain
+      effect:
+        specifier: ^3.21.4
+        version: 3.21.4
     devDependencies:
       '@tripplan/eslint-config':
         specifier: workspace:*
@@ -30,12 +36,21 @@ importers:
       '@tripplan/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
+      '@types/aws-lambda':
+        specifier: ^8.10.162
+        version: 8.10.162
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
       eslint:
         specifier: ^9.17.0
         version: 9.39.5
       typescript:
         specifier: ~5.7.3
         version: 5.7.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(tsx@4.23.0))
 
   packages/domain:
     dependencies:
@@ -89,12 +104,18 @@ importers:
       '@tripplan/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
+      '@types/aws-lambda':
+        specifier: ^8.10.162
+        version: 8.10.162
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.1
       aws-cdk:
         specifier: ^2.178.2
         version: 2.1130.0
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
       eslint:
         specifier: ^9.17.0
         version: 9.39.5
@@ -164,6 +185,21 @@ packages:
 
   '@emnapi/wasi-threads@1.2.2':
     resolution: {integrity: sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA==}
+
+  '@ericminassian/auth@1.1.0':
+    resolution: {integrity: sha512-C1uigabh5EQhEsDzZfvN5TEI6vCO1StMeFXhlPMZo9XNv4DN8Riu+ERVqH4dTwwJA+HRGZ5ajbpr2UbeBbPeZA==}
+    engines: {node: '>=20.19'}
+    peerDependencies:
+      express: '>=5'
+      hono: '>=4'
+      react: '>=18'
+    peerDependenciesMeta:
+      express:
+        optional: true
+      hono:
+        optional: true
+      react:
+        optional: true
 
   '@esbuild/aix-ppc64@0.28.1':
     resolution: {integrity: sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==}
@@ -488,6 +524,9 @@ packages:
 
   '@tybys/wasm-util@0.10.3':
     resolution: {integrity: sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==}
+
+  '@types/aws-lambda@8.10.162':
+    resolution: {integrity: sha512-Fn658grtLOci1oxi1391vvDWJRKNGWRSqfxRkmN/Iy3c0tQH1USMKEXcPYHLvope+ZgTFocx9FRQJx1muBL6qw==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -849,6 +888,9 @@ packages:
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
+
+  jose@6.2.3:
+    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
   js-yaml@4.3.0:
     resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
@@ -1241,6 +1283,10 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
+  '@ericminassian/auth@1.1.0':
+    dependencies:
+      jose: 6.2.3
+
   '@esbuild/aix-ppc64@0.28.1':
     optional: true
 
@@ -1449,6 +1495,8 @@ snapshots:
     dependencies:
       tslib: 2.8.1
     optional: true
+
+  '@types/aws-lambda@8.10.162': {}
 
   '@types/chai@5.2.3':
     dependencies:
@@ -1846,6 +1894,8 @@ snapshots:
       is-extglob: 2.1.1
 
   isexe@2.0.0: {}
+
+  jose@6.2.3: {}
 
   js-yaml@4.3.0:
     dependencies:
