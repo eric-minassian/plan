@@ -6,6 +6,7 @@ import { createWebAuthClient } from "./auth/create-web-auth-client.ts";
 import { AppShell } from "./components/AppShell.tsx";
 import { ProtectedRoute } from "./components/ProtectedRoute.tsx";
 import type { AppConfig } from "./config.ts";
+import { ConfigProvider } from "./config/ConfigContext.tsx";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage.tsx";
 import { ShareViewerPage } from "./pages/ShareViewerPage.tsx";
 import { TripDetailPage } from "./pages/TripDetailPage.tsx";
@@ -15,40 +16,42 @@ export interface AppProps {
   readonly config: AppConfig;
 }
 
-/** TripPlan SPA root: auth, trip list, day timeline, share viewer. */
+/** TripPlan SPA root: auth, trip list, timeline + map, share viewer. */
 export function App({ config }: AppProps) {
   const authClient = useMemo(() => createWebAuthClient(config), [config]);
 
   return (
-    <AuthClientProvider client={authClient}>
-      <AuthProvider client={authClient}>
-        <BrowserRouter>
-          <AppShell>
-            <Routes>
-              <Route path="/auth/callback" element={<AuthCallbackPage />} />
-              {/* Public share viewer — no owner auth; token in URL hash. */}
-              <Route path="/s" element={<ShareViewerPage />} />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <TripListPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/trips/:tripId"
-                element={
-                  <ProtectedRoute>
-                    <TripDetailPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </AppShell>
-        </BrowserRouter>
-      </AuthProvider>
-    </AuthClientProvider>
+    <ConfigProvider config={config}>
+      <AuthClientProvider client={authClient}>
+        <AuthProvider client={authClient}>
+          <BrowserRouter>
+            <AppShell>
+              <Routes>
+                <Route path="/auth/callback" element={<AuthCallbackPage />} />
+                {/* Public share viewer — no owner auth; token in URL hash. */}
+                <Route path="/s" element={<ShareViewerPage />} />
+                <Route
+                  path="/"
+                  element={
+                    <ProtectedRoute>
+                      <TripListPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/trips/:tripId"
+                  element={
+                    <ProtectedRoute>
+                      <TripDetailPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </AppShell>
+          </BrowserRouter>
+        </AuthProvider>
+      </AuthClientProvider>
+    </ConfigProvider>
   );
 }

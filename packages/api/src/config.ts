@@ -6,10 +6,6 @@
 export interface ApiConfig {
   readonly stage: string;
   readonly tableName: string | undefined;
-  /** S3 documents bucket name (presigned attachments). */
-  readonly docsBucketName: string | undefined;
-  /** AWS region for S3 client (defaults to us-east-1). */
-  readonly awsRegion: string;
   readonly authIssuer: string;
   readonly authAudience: string;
   /**
@@ -38,13 +34,9 @@ export function loadConfig(
     rawBase !== undefined && rawBase.length > 0
       ? rawBase.replace(/\/$/, "")
       : undefined;
-  const rawBucket = env.DOCS_BUCKET_NAME?.trim();
   return {
     stage: env.STAGE ?? "dev",
     tableName: env.TABLE_NAME,
-    docsBucketName:
-      rawBucket !== undefined && rawBucket.length > 0 ? rawBucket : undefined,
-    awsRegion: env.AWS_REGION?.trim() || "us-east-1",
     authIssuer: env.AUTH_ISSUER ?? "https://auth.ericminassian.com",
     authAudience: env.AUTH_AUDIENCE ?? "plan",
     publicApiBaseUrl,

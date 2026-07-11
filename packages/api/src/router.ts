@@ -24,27 +24,9 @@ import type {
 } from "./http/types.js";
 import type { Logger } from "./logging/logger.js";
 import { consoleLogger } from "./logging/logger.js";
-import {
-  AttachmentRepo,
-  makeInMemoryAttachmentRepo,
-  type AttachmentRepository,
-} from "./repos/attachment-repo.js";
 import { ShareRepo, type ShareRepository } from "./repos/share-repo.js";
 import { TripRepo, type TripRepository } from "./repos/trip-repo.js";
 import { UserRepo, type UserRepository } from "./repos/user-repo.js";
-import {
-  DocsStore,
-  makeMockDocsStore,
-  type DocsStoreService,
-} from "./s3/docs-store.js";
-import {
-  handleConfirmAttachment,
-  handleDeleteAttachment,
-  handleListAttachments,
-  handleOwnerAttachmentUrl,
-  handlePresignAttachment,
-  handleShareAttachmentUrl,
-} from "./routes/attachments.js";
 import { handleHealth } from "./routes/health.js";
 import { handleMe } from "./routes/me.js";
 import {
@@ -77,8 +59,6 @@ export type RouteHandlerEnv =
   | UserRepo
   | TripRepo
   | ShareRepo
-  | AttachmentRepo
-  | DocsStore
   | RequestContext
   | CurrentOwner
   | CurrentShare;
@@ -170,37 +150,6 @@ export function buildRoutes(
       authClass: "owner",
       handler: handleCreateItem,
     },
-    // Attachment routes (static leaves before :attachmentId)
-    {
-      method: "POST",
-      path: "/api/v1/trips/:tripId/items/:itemId/attachments/presign",
-      authClass: "owner",
-      handler: handlePresignAttachment,
-    },
-    {
-      method: "GET",
-      path: "/api/v1/trips/:tripId/items/:itemId/attachments",
-      authClass: "owner",
-      handler: handleListAttachments,
-    },
-    {
-      method: "POST",
-      path: "/api/v1/trips/:tripId/items/:itemId/attachments/:attachmentId/confirm",
-      authClass: "owner",
-      handler: handleConfirmAttachment,
-    },
-    {
-      method: "GET",
-      path: "/api/v1/trips/:tripId/items/:itemId/attachments/:attachmentId/url",
-      authClass: "owner",
-      handler: handleOwnerAttachmentUrl,
-    },
-    {
-      method: "DELETE",
-      path: "/api/v1/trips/:tripId/items/:itemId/attachments/:attachmentId",
-      authClass: "owner",
-      handler: handleDeleteAttachment,
-    },
     {
       method: "PATCH",
       path: "/api/v1/trips/:tripId/items/:itemId",
@@ -253,12 +202,6 @@ export function buildRoutes(
       authClass: "share",
       handler: handleGetShareTrip,
     },
-    {
-      method: "GET",
-      path: "/api/v1/share/items/:itemId/attachments/:attachmentId/url",
-      authClass: "share",
-      handler: handleShareAttachmentUrl,
-    },
   ];
 }
 
@@ -270,8 +213,6 @@ export interface RouterDeps {
   readonly userRepo: UserRepository;
   readonly tripRepo: TripRepository;
   readonly shareRepo?: ShareRepository;
-  readonly attachmentRepo?: AttachmentRepository;
-  readonly docsStore?: DocsStoreService;
   readonly shareAuth?: ShareAuthService;
   readonly logger?: Logger;
   readonly routes?: readonly RouteDefinition[];
@@ -365,13 +306,6 @@ export function handleRequest(
   // Resolve share repo once (prefer deps).
   const resolvedShareRepo = shareRepo;
 
-  // Default in-memory attachment/docs stores for unit tests that omit them.
-  // Item delete cascade and share trip attachment meta need these present.
-  const attachmentRepoService: AttachmentRepository =
-    deps.attachmentRepo ?? makeInMemoryAttachmentRepo();
-  const docsStoreService: DocsStoreService =
-    deps.docsStore ?? makeMockDocsStore();
-
   const shareAuth: ShareAuthService =
     deps.shareAuth ??
     (resolvedShareRepo !== undefined
@@ -410,11 +344,6 @@ export function handleRequest(
       deleteSession: () => Effect.fail(AppError.internal()),
     } satisfies ShareRepository);
   const shareRepoLayer = Layer.succeed(ShareRepo, shareRepoService);
-  const attachmentRepoLayer = Layer.succeed(
-    AttachmentRepo,
-    attachmentRepoService,
-  );
-  const docsStoreLayer = Layer.succeed(DocsStore, docsStoreService);
 
   const appLayer = Layer.mergeAll(
     requestLayer,
@@ -423,8 +352,6 @@ export function handleRequest(
     userLayer,
     tripLayer,
     shareRepoLayer,
-    attachmentRepoLayer,
-    docsStoreLayer,
   );
 
   type CoreEnv =
@@ -433,8 +360,6 @@ export function handleRequest(
     | UserRepo
     | TripRepo
     | ShareRepo
-    | AttachmentRepo
-    | DocsStore
     | RequestContext;
 
   const program: Effect.Effect<HttpResponse> = Effect.gen(function* () {

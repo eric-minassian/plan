@@ -20,7 +20,7 @@ import { ApiClientError, formatApiError } from "../api/errors.ts";
 import { useAuthClient } from "../auth/AuthClientContext.tsx";
 import { FlightForm } from "../components/FlightForm.tsx";
 import { NoteForm } from "../components/NoteForm.tsx";
-import { SharePanel } from "../components/SharePanel.tsx";
+import { itemHasMapGeo, TripMapPanel, useAirportsIndex } from "../map/index.ts";
 import { bucketTripItems } from "../timeline/bucket.ts";
 import {
   formatCivilDateLabel,
@@ -109,11 +109,12 @@ function hasConfirmation(item: ItineraryItem): boolean {
   return (item.confirmationCode ?? "").trim().length > 0;
 }
 
-/** Trip detail: day-grouped timeline + flight/note editors (PR 8b). */
+/** Trip detail: day-grouped timeline + map + flight/note editors (PR 8b/13). */
 export function TripDetailPage() {
   const { tripId } = useParams<{ tripId: string }>();
   const authClient = useAuthClient();
   const { signOut } = useAuth();
+  const airportsLoad = useAirportsIndex();
 
   const onUnauthorized = useCallback(async () => {
     await signOut({ postLogoutRedirectUri: window.location.origin });
@@ -133,8 +134,16 @@ export function TripDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | undefined>(undefined);
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
+  const [selectedItemId, setSelectedItemId] = useState<string | undefined>(
+    undefined,
+  );
 
   const loadGeneration = useRef(0);
+  const itemRefs = useRef(new Map<string, HTMLLIElement>());
+
+  useEffect(() => {
+    setSelectedItemId(undefined);
+  }, [tripId]);
 
   const loadTrip = useCallback(async (): Promise<TripDetailResponse | undefined> => {
     if (tripId === undefined || tripId.length === 0) {
@@ -315,6 +324,9 @@ export function TripDetailPage() {
     try {
       await api.deleteItem(tripId, item.itemId);
       removeItem(item.itemId);
+      if (selectedItemId === item.itemId) {
+        setSelectedItemId(undefined);
+      }
       if (
         (editor.kind === "edit-flight" || editor.kind === "edit-note") &&
         editor.item.itemId === item.itemId
@@ -339,28 +351,67 @@ export function TripDetailPage() {
     }
   }
 
+  function selectItem(itemId: string | undefined): void {
+    setSelectedItemId(itemId);
+    if (itemId === undefined) {
+      return;
+    }
+    const el = itemRefs.current.get(itemId);
+    if (el !== undefined) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
   function renderItemCard(item: ItineraryItem) {
     const timezone = detail?.timezone ?? "UTC";
     const editable = item.type === "flight" || item.type === "note";
     const subtitle = itemSubtitle(item, timezone);
+    const selected = selectedItemId === item.itemId;
+    // Suppress badge while airports load so IATA-only flights don't flash "Add location".
+    const showAddLocation =
+      airportsLoad.status === "ready" &&
+      !itemHasMapGeo(item, airportsLoad.index);
     return (
-      <li key={item.itemId} className="item-card">
-        <div className="item-card__main">
-          <div className="item-card__head">
-            <span className={`item-type item-type--${item.type}`}>
-              {itemTypeLabel(item.type)}
-            </span>
-            <span className="item-card__title">{item.title}</span>
+      <li
+        key={item.itemId}
+        className={`item-card${selected ? " item-card--selected" : ""}`}
+        ref={(node) => {
+          if (node === null) {
+            itemRefs.current.delete(item.itemId);
+          } else {
+            itemRefs.current.set(item.itemId, node);
+          }
+        }}
+      >
+        <button
+          type="button"
+          className="item-card__select"
+          onClick={() => {
+            selectItem(item.itemId);
+          }}
+        >
+          <div className="item-card__main">
+            <div className="item-card__head">
+              <span className={`item-type item-type--${item.type}`}>
+                {itemTypeLabel(item.type)}
+              </span>
+              <span className="item-card__title">{item.title}</span>
+              {showAddLocation ? (
+                <span className="item-badge item-badge--location">
+                  Add location
+                </span>
+              ) : null}
+            </div>
+            {subtitle !== undefined ? (
+              <p className="item-card__sub">{subtitle}</p>
+            ) : null}
+            {item.type === "flight" && hasConfirmation(item) ? (
+              <p className="item-card__meta">
+                Confirmation: {item.confirmationCode}
+              </p>
+            ) : null}
           </div>
-          {subtitle !== undefined ? (
-            <p className="item-card__sub">{subtitle}</p>
-          ) : null}
-          {item.type === "flight" && hasConfirmation(item) ? (
-            <p className="item-card__meta">
-              Confirmation: {item.confirmationCode}
-            </p>
-          ) : null}
-        </div>
+        </button>
         <div className="item-card__actions">
           {editable ? (
             <button
@@ -459,104 +510,118 @@ export function TripDetailPage() {
             </div>
           </section>
 
-          <SharePanel tripId={detail.tripId} api={api} />
-
-          <section className="panel">
-            <div className="panel__header">
-              <h2>Timeline</h2>
-              <div className="trip-detail__add">
-                <button
-                  type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={openCreateFlight}
-                >
-                  + Flight
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={openCreateNote}
-                >
-                  + Note
-                </button>
+          <div className="trip-workspace">
+            <section className="panel trip-workspace__timeline">
+              <div className="panel__header">
+                <h2>Timeline</h2>
+                <div className="trip-detail__add">
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--sm"
+                    onClick={openCreateFlight}
+                  >
+                    + Flight
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--sm"
+                    onClick={openCreateNote}
+                  >
+                    + Note
+                  </button>
+                </div>
               </div>
+
+              {editor.kind === "create-flight" ||
+              editor.kind === "edit-flight" ? (
+                <div className="item-form-wrap">
+                  <FlightForm
+                    key={flightFormKey}
+                    mode={
+                      editor.kind === "create-flight"
+                        ? { kind: "create" }
+                        : { kind: "edit", item: editor.item }
+                    }
+                    tripTimezone={detail.timezone}
+                    submitting={submitting}
+                    error={formError}
+                    onCancel={closeEditor}
+                    onCreate={handleCreate}
+                    onUpdate={handleUpdate}
+                  />
+                </div>
+              ) : null}
+
+              {editor.kind === "create-note" || editor.kind === "edit-note" ? (
+                <div className="item-form-wrap">
+                  <NoteForm
+                    key={noteFormKey}
+                    mode={
+                      editor.kind === "create-note"
+                        ? { kind: "create" }
+                        : { kind: "edit", item: editor.item }
+                    }
+                    tripTimezone={detail.timezone}
+                    submitting={submitting}
+                    error={formError}
+                    onCancel={closeEditor}
+                    onCreate={handleCreate}
+                    onUpdate={handleUpdate}
+                  />
+                </div>
+              ) : null}
+
+              {buckets !== undefined &&
+              buckets.days.length === 0 &&
+              buckets.unscheduled.length === 0 ? (
+                <p className="muted">
+                  No items yet. Add a flight or note to start the timeline.
+                </p>
+              ) : null}
+
+              {buckets !== undefined
+                ? buckets.days.map((day) => (
+                    <div key={day.date} className="day-bucket">
+                      <header className="day-bucket__header">
+                        <span className="day-bucket__num">
+                          Day {day.dayNumber}
+                        </span>
+                        <span className="day-bucket__date">
+                          {formatCivilDateLabel(day.date)}
+                        </span>
+                      </header>
+                      <ul className="item-list">
+                        {day.items.map((item) => renderItemCard(item))}
+                      </ul>
+                    </div>
+                  ))
+                : null}
+
+              {buckets !== undefined && buckets.unscheduled.length > 0 ? (
+                <div className="day-bucket day-bucket--unscheduled">
+                  <header className="day-bucket__header">
+                    <span className="day-bucket__num">Unscheduled</span>
+                    <span className="day-bucket__date">No start time</span>
+                  </header>
+                  <ul className="item-list">
+                    {buckets.unscheduled.map((item) => renderItemCard(item))}
+                  </ul>
+                </div>
+              ) : null}
+            </section>
+
+            <div className="trip-workspace__map">
+              <TripMapPanel
+                items={detail.items}
+                tripTimezone={detail.timezone}
+                tripStartDate={detail.startDate}
+                airports={airportsLoad}
+                onRetryAirports={airportsLoad.retry}
+                selectedItemId={selectedItemId}
+                onSelectItem={selectItem}
+              />
             </div>
-
-            {editor.kind === "create-flight" ||
-            editor.kind === "edit-flight" ? (
-              <div className="item-form-wrap">
-                <FlightForm
-                  key={flightFormKey}
-                  mode={
-                    editor.kind === "create-flight"
-                      ? { kind: "create" }
-                      : { kind: "edit", item: editor.item }
-                  }
-                  tripTimezone={detail.timezone}
-                  submitting={submitting}
-                  error={formError}
-                  onCancel={closeEditor}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                />
-              </div>
-            ) : null}
-
-            {editor.kind === "create-note" || editor.kind === "edit-note" ? (
-              <div className="item-form-wrap">
-                <NoteForm
-                  key={noteFormKey}
-                  mode={
-                    editor.kind === "create-note"
-                      ? { kind: "create" }
-                      : { kind: "edit", item: editor.item }
-                  }
-                  tripTimezone={detail.timezone}
-                  submitting={submitting}
-                  error={formError}
-                  onCancel={closeEditor}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                />
-              </div>
-            ) : null}
-
-            {buckets !== undefined &&
-            buckets.days.length === 0 &&
-            buckets.unscheduled.length === 0 ? (
-              <p className="muted">
-                No items yet. Add a flight or note to start the timeline.
-              </p>
-            ) : null}
-
-            {buckets !== undefined
-              ? buckets.days.map((day) => (
-                  <div key={day.date} className="day-bucket">
-                    <header className="day-bucket__header">
-                      <span className="day-bucket__num">Day {day.dayNumber}</span>
-                      <span className="day-bucket__date">
-                        {formatCivilDateLabel(day.date)}
-                      </span>
-                    </header>
-                    <ul className="item-list">
-                      {day.items.map((item) => renderItemCard(item))}
-                    </ul>
-                  </div>
-                ))
-              : null}
-
-            {buckets !== undefined && buckets.unscheduled.length > 0 ? (
-              <div className="day-bucket day-bucket--unscheduled">
-                <header className="day-bucket__header">
-                  <span className="day-bucket__num">Unscheduled</span>
-                  <span className="day-bucket__date">No start time</span>
-                </header>
-                <ul className="item-list">
-                  {buckets.unscheduled.map((item) => renderItemCard(item))}
-                </ul>
-              </div>
-            ) : null}
-          </section>
+          </div>
         </>
       ) : null}
     </div>

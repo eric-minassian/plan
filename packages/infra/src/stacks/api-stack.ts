@@ -8,8 +8,6 @@ import {
   OutputFormat,
 } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as iam from "aws-cdk-lib/aws-iam";
-import type * as s3 from "aws-cdk-lib/aws-s3";
 import type { Construct } from "constructs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +21,6 @@ export interface ApiStackProps extends cdk.StackProps {
   readonly stage: Stage;
   /** Single-table DynamoDB from DataStack. */
   readonly table: dynamodb.ITable;
-  /** Documents bucket for presigned attachment PUT/GET. */
-  readonly documentsBucket: s3.IBucket;
   /** Optional log retention from FoundationStack (defaults by stage). */
   readonly logRetention?: logs.RetentionDays;
 }
@@ -34,9 +30,9 @@ export interface ApiStackProps extends cdk.StackProps {
  * JWT is verified in-Lambda via `@ericminassian/auth` — no Cognito, no
  * API Gateway JWT authorizer on owner routes.
  *
- * Persistence: `TABLE_NAME` + Dynamo R/W grants enable trip/item/share/ATT rows.
- * `DOCS_BUCKET_NAME` + S3 R/W for presigned attachments (HeadObject, tags, delete).
- * User profile upsert remains in-memory until a Dynamo UserRepository lands.
+ * Persistence: `TABLE_NAME` + Dynamo R/W grants enable trip meta CRUD
+ * (`USER#ownerId` / `TRIP#tripId` + GSI1). User profile upsert remains
+ * in-memory until a Dynamo UserRepository lands.
  */
 export class ApiStack extends cdk.Stack {
   readonly httpApi: apigwv2.HttpApi;
@@ -46,7 +42,7 @@ export class ApiStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
 
-    const { stage, table, documentsBucket } = props;
+    const { stage, table } = props;
     const prod = isProdStage(stage);
     const logRetention =
       props.logRetention ??
@@ -78,7 +74,6 @@ export class ApiStack extends cdk.Stack {
       logRetention,
       environment: {
         TABLE_NAME: table.tableName,
-        DOCS_BUCKET_NAME: documentsBucket.bucketName,
         AUTH_ISSUER: "https://auth.ericminassian.com",
         AUTH_AUDIENCE: "plan",
         STAGE: stage,
@@ -99,24 +94,11 @@ export class ApiStack extends cdk.Stack {
         // Keep Effect + auth SDK in the bundle so Lambda has no node_modules layout issues.
         externalModules: ["@aws-sdk/*"],
       },
-      description: `TripPlan HTTP API (${stage}) — trips, items, shares, attachments`,
+      description: `TripPlan HTTP API (${stage}) — health, me, owner trip CRUD`,
     });
 
-    // R/W for trip/item/share/ATT single-table access.
+    // R/W for trip meta (and future profile) single-table access.
     table.grantReadWriteData(this.apiFunction);
-    // Presign is SigV4 (no IAM on client); Lambda needs HeadObject, tagging, delete.
-    documentsBucket.grantReadWrite(this.apiFunction);
-    // Tagging for pending=true lifecycle (IBucket has no .grant helper).
-    this.apiFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "s3:PutObjectTagging",
-          "s3:GetObjectTagging",
-          "s3:DeleteObjectTagging",
-        ],
-        resources: [documentsBucket.arnForObjects("*")],
-      }),
-    );
 
     this.httpApi = new apigwv2.HttpApi(this, "HttpApi", {
       apiName: `tripplan-${stage}`,

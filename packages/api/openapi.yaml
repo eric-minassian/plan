@@ -407,141 +407,7 @@ paths:
       tags: [Owner]
       summary: Delete itinerary item
       description: |
-        Deletes the item row and cascades its attachments (DDB ATT rows + S3 objects).
-      security:
-        - ownerBearer: []
-      responses:
-        "204":
-          description: Deleted
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/v1/trips/{tripId}/items/{itemId}/attachments:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
-      - $ref: "#/components/parameters/itemId"
-    get:
-      operationId: listAttachments
-      tags: [Owner]
-      summary: List attachments for item
-      description: |
-        Returns attachment metadata (pending + ready) for the item. Omits s3Key.
-      security:
-        - ownerBearer: []
-      responses:
-        "200":
-          description: Attachment list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AttachmentListResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/v1/trips/{tripId}/items/{itemId}/attachments/presign:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
-      - $ref: "#/components/parameters/itemId"
-    post:
-      operationId: presignAttachment
-      tags: [Owner]
-      summary: Presign attachment upload
-      description: |
-        Creates a pending ATT row (TTL 24h) and returns a SigV4 presigned PUT URL.
-        Server generates S3 key `trips/{tripId}/items/{itemId}/{attachmentId}`
-        (fileName never enters the key). PUT signs Content-Type, Content-Length,
-        and `x-amz-tagging: pending=true`. Limits: 10 attachments/item, 5 concurrent
-        pending, 15 MB max, allowlisted MIME types.
-      security:
-        - ownerBearer: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PresignAttachment"
-      responses:
-        "201":
-          description: Pending row created; client must PUT then confirm
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PresignAttachmentResponse"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/v1/trips/{tripId}/items/{itemId}/attachments/{attachmentId}/confirm:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
-      - $ref: "#/components/parameters/itemId"
-      - $ref: "#/components/parameters/attachmentId"
-    post:
-      operationId: confirmAttachment
-      tags: [Owner]
-      summary: Confirm attachment upload
-      description: |
-        HeadObject re-check (size must equal declared sizeBytes; Content-Type
-        must match allowlist / declared type). Clears S3 `pending` tag and sets
-        DDB status to `ready`. Idempotent when already ready.
-      security:
-        - ownerBearer: []
-      responses:
-        "200":
-          description: Attachment ready
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AttachmentMeta"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /api/v1/trips/{tripId}/items/{itemId}/attachments/{attachmentId}/url:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
-      - $ref: "#/components/parameters/itemId"
-      - $ref: "#/components/parameters/attachmentId"
-    get:
-      operationId: getOwnerAttachmentUrl
-      tags: [Owner]
-      summary: Owner presigned download URL
-      description: |
-        Short-lived presigned GET with Content-Disposition attachment.
-        Rejects if status ≠ ready.
-      security:
-        - ownerBearer: []
-      responses:
-        "200":
-          description: Presigned download URL
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AttachmentDownloadUrlResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /api/v1/trips/{tripId}/items/{itemId}/attachments/{attachmentId}:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
-      - $ref: "#/components/parameters/itemId"
-      - $ref: "#/components/parameters/attachmentId"
-    delete:
-      operationId: deleteAttachment
-      tags: [Owner]
-      summary: Delete attachment
-      description: Deletes the S3 object and DDB ATT row.
+        Deletes the item row. Attachment cascade deferred to attachments PR.
       security:
         - ownerBearer: []
       responses:
@@ -689,7 +555,7 @@ paths:
       tags: [Share]
       summary: Read-only shared trip
       description: |
-        Returns ShareTripDTO (meta + items + ready attachment metadata only).
+        Returns ShareTripDTO (meta + items, no attachments in this version).
         Revalidates grant + trip every request; 410 if trip deleted/deleting;
         401 if grant revoked/expired or session missing.
       security:
@@ -705,33 +571,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "410":
           $ref: "#/components/responses/Gone"
-  /api/v1/share/items/{itemId}/attachments/{attachmentId}/url:
-    parameters:
-      - $ref: "#/components/parameters/itemId"
-      - $ref: "#/components/parameters/attachmentId"
-    get:
-      operationId: getShareAttachmentUrl
-      tags: [Share]
-      summary: Share viewer presigned download URL
-      description: |
-        Session supplies tripId; GetItem `PK=TRIP#tripId`,
-        `SK=ATT#itemId#attachmentId`. Rejects if status ≠ ready.
-        No dual-auth under `/trips*` — share-only path.
-      security:
-        - shareCookie: []
-      responses:
-        "200":
-          description: Presigned download URL
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AttachmentDownloadUrlResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
 components:
   securitySchemes:
     ownerBearer:
@@ -761,12 +600,6 @@ components:
         type: string
     shareId:
       name: shareId
-      in: path
-      required: true
-      schema:
-        type: string
-    attachmentId:
-      name: attachmentId
       in: path
       required: true
       schema:
@@ -1165,7 +998,6 @@ components:
         - endDate
         - ownerDisplayName
         - items
-        - attachments
       properties:
         tripId:
           type: string
@@ -1184,102 +1016,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ItineraryItem"
-        attachments:
-          type: array
-          items:
-            $ref: "#/components/schemas/AttachmentMeta"
-          description: Ready attachment metadata only (pending omitted; no s3Key)
-    PresignAttachment:
-      type: object
-      additionalProperties: false
-      required: [contentType, fileName, sizeBytes]
-      properties:
-        contentType:
-          type: string
-          description: Allowlisted MIME (application/pdf, image/jpeg|png|webp|gif)
-        fileName:
-          type: string
-          minLength: 1
-          maxLength: 180
-        sizeBytes:
-          type: integer
-          exclusiveMinimum: 0
-          maximum: 15728640
-          description: Exact integer byte length; signed on PUT and re-checked via HeadObject
-    PresignAttachmentResponse:
-      type: object
-      additionalProperties: false
-      required: [attachmentId, s3Key, uploadUrl, requiredHeaders, expiresIn]
-      properties:
-        attachmentId:
-          type: string
-        s3Key:
-          type: string
-          description: Server-generated key trips/{tripId}/items/{itemId}/{attachmentId}
-        uploadUrl:
-          type: string
-          description: SigV4 presigned PUT URL
-        requiredHeaders:
-          type: object
-          additionalProperties:
-            type: string
-          description: Headers the client must send (Content-Type, Content-Length, x-amz-tagging)
-        expiresIn:
-          type: number
-          description: Seconds until the upload URL expires
-    AttachmentMeta:
-      type: object
-      additionalProperties: false
-      required:
-        - attachmentId
-        - tripId
-        - itemId
-        - status
-        - contentType
-        - sizeBytes
-        - fileName
-        - createdAt
-      properties:
-        attachmentId:
-          type: string
-        tripId:
-          type: string
-        itemId:
-          type: string
-        status:
-          type: string
-          enum: [pending, ready]
-        contentType:
-          type: string
-        sizeBytes:
-          type: number
-        fileName:
-          type: string
-          maxLength: 180
-        createdAt:
-          type: string
-        expiresAt:
-          type: string
-          description: Present while pending (24h TTL)
-    AttachmentListResponse:
-      type: object
-      additionalProperties: false
-      required: [attachments]
-      properties:
-        attachments:
-          type: array
-          items:
-            $ref: "#/components/schemas/AttachmentMeta"
-    AttachmentDownloadUrlResponse:
-      type: object
-      additionalProperties: false
-      required: [url, expiresIn]
-      properties:
-        url:
-          type: string
-          description: Short-lived presigned GET URL
-        expiresIn:
-          type: number
+          description: Items only; attachment metadata added in a later PR
     ApiErrorBody:
       type: object
       additionalProperties: false
