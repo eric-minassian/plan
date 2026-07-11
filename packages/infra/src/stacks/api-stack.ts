@@ -11,6 +11,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import type { Construct } from "constructs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { apiCorsOrigins, spaOriginForStage } from "../hosts.js";
 import { isProdStage, type Stage } from "../stage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -179,33 +180,19 @@ export class ApiStack extends cdk.Stack {
 }
 
 /**
- * CORS: prod/staging only SPA hosts (credentialed share cookies must not be
- * readable from arbitrary localhost pages against prod). Dev keeps Vite local.
+ * CORS: prod/staging only their stage SPA host (credentialed share cookies must
+ * not be readable from arbitrary localhost pages against non-dev APIs).
+ * Dev keeps Vite local. Origins shared via `apiCorsOrigins` in hosts.ts.
  */
 function corsOrigins(stage: Stage): string[] {
-  const productionSpa = "https://plan.ericminassian.com";
-  const localVite = "http://localhost:5173";
-  switch (stage) {
-    case "prod":
-      return [productionSpa];
-    case "staging":
-      // Add a dedicated staging SPA host when it exists.
-      return [productionSpa];
-    case "dev":
-      return [productionSpa, localVite];
-  }
+  return apiCorsOrigins(stage);
 }
 
 /**
  * Trusted public origin for DPoP `htu` reconstruction.
  * Dev leaves unset so Lambda uses API Gateway `Host` (execute-api URL).
+ * Staging/prod use the stage SPA host (same CloudFront public host as /api).
  */
 function publicApiBaseUrlForStage(stage: Stage): string | undefined {
-  switch (stage) {
-    case "prod":
-    case "staging":
-      return "https://plan.ericminassian.com";
-    case "dev":
-      return undefined;
-  }
+  return spaOriginForStage(stage);
 }
