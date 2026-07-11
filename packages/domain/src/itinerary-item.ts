@@ -98,8 +98,15 @@ export const TicketDetails = S.Struct({
 });
 export type TicketDetails = typeof TicketDetails.Type;
 
-/** Note items: body lives in base `notes`; details is empty struct. */
-export const NoteDetails = S.Struct({});
+/**
+ * Note items: body lives in base `notes`; details must be an empty object.
+ * Effect's default Struct keeps unknown keys, so we filter to require emptiness.
+ */
+export const NoteDetails = S.Struct({}).pipe(
+  S.filter((r) => Object.keys(r).length === 0, {
+    message: () => "NoteDetails must be empty; put the note body in base notes",
+  }),
+);
 export type NoteDetails = typeof NoteDetails.Type;
 
 export const MAX_CUSTOM_FIELDS = 20 as const;
@@ -245,15 +252,9 @@ export const CreateItineraryItem = S.Union(
 export type CreateItineraryItem = typeof CreateItineraryItem.Type;
 
 /**
- * Update DTO: partial patch. `type` is intentionally absent (immutable —
- * change type by delete + create). When `details` is present it must match the
- * existing item type schema (full replace of details, not deep-merge).
- *
- * Callers supply the correct details schema via the typed variants, or use the
- * open form where details is validated against the stored item's type at the
- * service layer.
+ * Update field struct (no `type`). Used after rejecting payloads that include `type`.
  */
-export const UpdateItineraryItem = S.Struct({
+const UpdateItineraryItemFields = S.Struct({
   title: S.optional(Title),
   startAt: S.optional(InstantInput),
   endAt: S.optional(InstantInput),
@@ -266,10 +267,28 @@ export const UpdateItineraryItem = S.Struct({
   enrichment: S.optional(EnrichmentMeta),
   /**
    * Full replace of details for the item's existing type.
-   * Validated against the stored type in the service layer.
+   * Prefer {@link decodeUpdateDetails} with the stored item type.
    */
   details: S.optional(S.Unknown),
 });
+
+/**
+ * Update DTO: partial patch. `type` is immutable — change type by delete + create.
+ * Sending `type` fails decode with message suitable for 400 ValidationError.
+ * When `details` is present it must match the existing item type schema
+ * (full replace of details, not deep-merge) — use {@link decodeUpdateDetails}.
+ */
+export const UpdateItineraryItem = S.Unknown.pipe(
+  S.filter(
+    (u) =>
+      typeof u === "object" &&
+      u !== null &&
+      !Array.isArray(u) &&
+      !("type" in u),
+    { message: () => "type is immutable; delete and recreate" },
+  ),
+  S.compose(UpdateItineraryItemFields),
+);
 export type UpdateItineraryItem = typeof UpdateItineraryItem.Type;
 
 /** Typed update details helpers for service-layer validation. */
@@ -283,3 +302,35 @@ export const DetailsByType = {
   note: NoteDetails,
   custom: CustomDetails,
 } as const;
+
+export type DetailsForType<T extends ItemType> = S.Schema.Type<
+  (typeof DetailsByType)[T]
+>;
+
+/**
+ * Decode a full-replace `details` payload against the stored item's type schema.
+ * Prefer this over trusting `UpdateItineraryItem.details` as `Unknown`.
+ */
+export function decodeUpdateDetails(
+  type: ItemType,
+  details: unknown,
+) {
+  switch (type) {
+    case "flight":
+      return S.decodeUnknownEither(FlightDetails)(details);
+    case "train":
+      return S.decodeUnknownEither(TrainDetails)(details);
+    case "hotel":
+      return S.decodeUnknownEither(HotelDetails)(details);
+    case "transport":
+      return S.decodeUnknownEither(TransportDetails)(details);
+    case "activity":
+      return S.decodeUnknownEither(ActivityDetails)(details);
+    case "ticket":
+      return S.decodeUnknownEither(TicketDetails)(details);
+    case "note":
+      return S.decodeUnknownEither(NoteDetails)(details);
+    case "custom":
+      return S.decodeUnknownEither(CustomDetails)(details);
+  }
+}
