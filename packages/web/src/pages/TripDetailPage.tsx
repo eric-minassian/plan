@@ -20,7 +20,6 @@ import { ApiClientError, formatApiError } from "../api/errors.ts";
 import { useAuthClient } from "../auth/AuthClientContext.tsx";
 import { FlightForm } from "../components/FlightForm.tsx";
 import { NoteForm } from "../components/NoteForm.tsx";
-import { SharePanel } from "../components/SharePanel.tsx";
 import { bucketTripItems } from "../timeline/bucket.ts";
 import {
   formatCivilDateLabel,
@@ -459,8 +458,6 @@ export function TripDetailPage() {
             </div>
           </section>
 
-          <SharePanel tripId={detail.tripId} api={api} />
-
           <section className="panel">
             <div className="panel__header">
               <h2>Timeline</h2>
@@ -498,6 +495,7 @@ export function TripDetailPage() {
                   onCancel={closeEditor}
                   onCreate={handleCreate}
                   onUpdate={handleUpdate}
+                  onEnrichFlight={(query) => api.enrichFlight(query)}
                 />
               </div>
             ) : null}

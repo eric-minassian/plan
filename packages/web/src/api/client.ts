@@ -1,20 +1,16 @@
 import { AuthError, type AuthClient } from "@ericminassian/auth/client";
 import type {
   CreateItineraryItem,
-  CreateShareGrant,
-  CreateShareResponse,
   CreateTrip,
+  EnrichFlightRequest,
+  FlightEnrichmentResponse,
   ItineraryItem,
-  ShareListResponse,
-  ShareTripDTO,
   Trip,
   UpdateItineraryItem,
 } from "@tripplan/domain";
 import {
-  decodeCreateShareResponse,
+  decodeFlightEnrichmentResponse,
   decodeItemResponse,
-  decodeShareListResponse,
-  decodeShareTripResponse,
   decodeTripDetailResponse,
   decodeTripListResponse,
   decodeTripResponse,
@@ -25,7 +21,6 @@ import {
 import { ApiClientError, parseApiErrorBody } from "./errors.ts";
 
 export type { TripDetailResponse, TripListResponse };
-export type { CreateShareResponse, ShareListResponse, ShareTripDTO };
 
 /**
  * Thin TripPlan HTTP client.
@@ -53,12 +48,7 @@ export interface TripPlanApi {
     input: UpdateItineraryItem,
   ): Promise<ItineraryItem>;
   deleteItem(tripId: string, itemId: string): Promise<void>;
-  listShares(tripId: string): Promise<ShareListResponse>;
-  createShare(
-    tripId: string,
-    input?: CreateShareGrant,
-  ): Promise<CreateShareResponse>;
-  revokeShare(tripId: string, shareId: string): Promise<void>;
+  enrichFlight(input: EnrichFlightRequest): Promise<FlightEnrichmentResponse>;
 }
 
 export interface TripPlanApiOptions {
@@ -153,131 +143,18 @@ export function createTripPlanApi(
         options,
       );
     },
-    listShares(tripId) {
+    enrichFlight(input) {
       return request(
-        `/api/v1/trips/${encodeURIComponent(tripId)}/shares`,
-        { method: "GET" },
-        decodeShareListResponse,
-      );
-    },
-    createShare(tripId, input = {}) {
-      return request(
-        `/api/v1/trips/${encodeURIComponent(tripId)}/shares`,
+        "/api/v1/enrich/flight",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         },
-        decodeCreateShareResponse,
-      );
-    },
-    revokeShare(tripId, shareId) {
-      return requestEmpty(
-        auth,
-        `/api/v1/trips/${encodeURIComponent(tripId)}/shares/${encodeURIComponent(shareId)}`,
-        { method: "DELETE" },
-        options,
+        decodeFlightEnrichmentResponse,
       );
     },
   };
-}
-
-/**
- * Public share API (cookie session; no owner JWT).
- * Uses `credentials: "include"` so the HttpOnly tripplan_share cookie is sent.
- */
-export interface SharePublicApi {
-  exchangeSession(token: string): Promise<void>;
-  clearSession(): Promise<void>;
-  getTrip(): Promise<ShareTripDTO>;
-}
-
-export function createSharePublicApi(): SharePublicApi {
-  return {
-    exchangeSession(token) {
-      return publicRequestEmpty("/api/v1/share/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-    },
-    clearSession() {
-      return publicRequestEmpty("/api/v1/share/session", {
-        method: "DELETE",
-      });
-    },
-    getTrip() {
-      return publicRequestJson(
-        "/api/v1/share/trip",
-        { method: "GET" },
-        decodeShareTripResponse,
-      );
-    },
-  };
-}
-
-async function publicRequestJson<T>(
-  path: string,
-  init: RequestInit,
-  decode: (json: unknown, status: number) => T,
-): Promise<T> {
-  const url = apiUrl(path);
-  const response = await fetch(url, {
-    ...init,
-    credentials: "include",
-  });
-  const text = await response.text();
-  let json: unknown;
-  if (text.length > 0) {
-    try {
-      json = JSON.parse(text) as unknown;
-    } catch {
-      throw new ApiClientError(
-        response.status,
-        undefined,
-        `Invalid JSON response (${String(response.status)})`,
-      );
-    }
-  }
-  if (!response.ok) {
-    throw new ApiClientError(response.status, parseApiErrorBody(json));
-  }
-  if (json === undefined) {
-    throw new ApiClientError(
-      response.status,
-      undefined,
-      "Empty response body",
-    );
-  }
-  return decode(json, response.status);
-}
-
-async function publicRequestEmpty(
-  path: string,
-  init: RequestInit,
-): Promise<void> {
-  const url = apiUrl(path);
-  const response = await fetch(url, {
-    ...init,
-    credentials: "include",
-  });
-  if (response.ok) {
-    return;
-  }
-  const text = await response.text();
-  let json: unknown;
-  if (text.length > 0) {
-    try {
-      json = JSON.parse(text) as unknown;
-    } catch {
-      throw new ApiClientError(
-        response.status,
-        undefined,
-        `Invalid JSON response (${String(response.status)})`,
-      );
-    }
-  }
-  throw new ApiClientError(response.status, parseApiErrorBody(json));
 }
 
 /** Resolve SPA-origin absolute URL (exported for tests). */

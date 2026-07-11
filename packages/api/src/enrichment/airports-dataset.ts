@@ -1,0 +1,81 @@
+/**
+ * Sample IATA→geo dataset (mirrors repo-root `data/airports/v1.json`).
+ * Bundled into the API so Lambda cold start does not depend on the monorepo
+ * data path. Keep this list in sync with the versioned JSON file.
+ */
+import type { Airport } from "@tripplan/domain";
+
+export const AIRPORTS_V1: readonly Airport[] = [
+  {
+    iata: "SFO",
+    name: "San Francisco International Airport",
+    city: "San Francisco",
+    country: "US",
+    lat: 37.6213,
+    lng: -122.379,
+    timezone: "America/Los_Angeles",
+  },
+  {
+    iata: "JFK",
+    name: "John F. Kennedy International Airport",
+    city: "New York",
+    country: "US",
+    lat: 40.6413,
+    lng: -73.7781,
+    timezone: "America/New_York",
+  },
+  {
+    iata: "LAX",
+    name: "Los Angeles International Airport",
+    city: "Los Angeles",
+    country: "US",
+    lat: 33.9425,
+    lng: -118.408,
+    timezone: "America/Los_Angeles",
+  },
+  {
+    iata: "ORD",
+    name: "O'Hare International Airport",
+    city: "Chicago",
+    country: "US",
+    lat: 41.9742,
+    lng: -87.9073,
+    timezone: "America/Chicago",
+  },
+  {
+    iata: "DFW",
+    name: "Dallas/Fort Worth International Airport",
+    city: "Dallas",
+    country: "US",
+    lat: 32.8998,
+    lng: -97.0403,
+    timezone: "America/Chicago",
+  },
+  {
+    iata: "LHR",
+    name: "London Heathrow Airport",
+    city: "London",
+    country: "GB",
+    lat: 51.47,
+    lng: -0.4543,
+    timezone: "Europe/London",
+  },
+  {
+    iata: "NRT",
+    name: "Narita International Airport",
+    city: "Tokyo",
+    country: "JP",
+    lat: 35.772,
+    lng: 140.3929,
+    timezone: "Asia/Tokyo",
+  },
+  {
+    iata: "HND",
+    name: "Tokyo Haneda Airport",
+    city: "Tokyo",
+    country: "JP",
+    lat: 35.5494,
+    lng: 139.7798,
+    timezone: "Asia/Tokyo",
+  },
+];
