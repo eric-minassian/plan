@@ -45,6 +45,15 @@ export interface TripPlanApi {
     input: UpdateItineraryItem,
   ): Promise<ItineraryItem>;
   deleteItem(tripId: string, itemId: string): Promise<void>;
+  /**
+   * Full-permutation reorder. `expectedTripVersion` is sent as If-Match on the
+   * **trip** (not item) version.
+   */
+  reorderItems(
+    tripId: string,
+    expectedTripVersion: number,
+    itemIds: readonly string[],
+  ): Promise<TripDetailResponse>;
 }
 
 export interface TripPlanApiOptions {
@@ -137,6 +146,20 @@ export function createTripPlanApi(
         `/api/v1/trips/${encodeURIComponent(tripId)}/items/${encodeURIComponent(itemId)}`,
         { method: "DELETE" },
         options,
+      );
+    },
+    reorderItems(tripId, expectedTripVersion, itemIds) {
+      return request(
+        `/api/v1/trips/${encodeURIComponent(tripId)}/items/reorder`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "If-Match": etagFromVersion(expectedTripVersion),
+          },
+          body: JSON.stringify({ itemIds }),
+        },
+        decodeTripDetailResponse,
       );
     },
   };

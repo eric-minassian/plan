@@ -252,4 +252,47 @@ describe("createTripPlanApi", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
   });
+
+  it("reorders items with trip If-Match and itemIds body", async () => {
+    const noteA = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "note" as const,
+      title: "A",
+      details: {},
+      sortKey: 1000,
+      version: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const noteB = {
+      ...noteA,
+      itemId: "i2",
+      title: "B",
+      sortKey: 2000,
+    };
+    const body = {
+      ...sampleTrip,
+      version: 2,
+      items: [noteB, noteA],
+    };
+    const fetchWithAuth = vi.fn(
+      async () => new Response(JSON.stringify(body), { status: 200 }),
+    );
+    const api = createTripPlanApi(mockAuth(fetchWithAuth));
+    const result = await api.reorderItems("t1", 1, ["i2", "i1"]);
+    expect(result.version).toBe(2);
+    expect(result.items.map((i) => i.itemId)).toEqual(["i2", "i1"]);
+    expect(fetchWithAuth).toHaveBeenCalledWith(
+      "https://plan.ericminassian.com/api/v1/trips/t1/items/reorder",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "If-Match": '"1"',
+        }),
+        body: JSON.stringify({ itemIds: ["i2", "i1"] }),
+      }),
+    );
+  });
 });

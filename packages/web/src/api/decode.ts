@@ -43,8 +43,7 @@ export function decodeCreateTrip(
 }
 
 /**
- * Decode create-item form payload (flight / note in PR 8b; other types accepted
- * by the domain schema if needed later).
+ * Decode create-item form payload for all itinerary item types.
  */
 export function decodeCreateItem(
   input: unknown,

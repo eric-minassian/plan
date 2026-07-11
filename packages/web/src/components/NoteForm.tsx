@@ -6,10 +6,8 @@ import type {
 import { Either } from "effect";
 import { useState, type FormEvent } from "react";
 import { decodeCreateItem, decodeUpdateItem } from "../api/decode.ts";
-import {
-  instantToWallClockLocal,
-  wallClockInZoneToInstant,
-} from "../timeline/datetime.ts";
+import { instantToWallClockLocal } from "../timeline/datetime.ts";
+import { optionalTrim, parseOptionalInstant } from "./form-utils.ts";
 
 export type NoteFormMode =
   | { readonly kind: "create" }
@@ -78,26 +76,19 @@ export function NoteForm(props: NoteFormProps) {
       return;
     }
 
-    let startAt: string | null | undefined;
-    if (form.startAtLocal.trim().length > 0) {
-      const instant = wallClockInZoneToInstant(
-        form.startAtLocal.trim(),
-        tripTimezone,
-      );
-      if (instant === undefined) {
-        setLocalError(
-          "Start time is invalid for this trip timezone (check date/time)",
-        );
-        return;
-      }
-      startAt = instant;
-    } else if (mode.kind === "edit") {
-      // Empty control on edit ⇒ clear (move to Unscheduled).
-      startAt = null;
+    const clearOnEmpty = mode.kind === "edit";
+    const startParsed = parseOptionalInstant(
+      form.startAtLocal,
+      tripTimezone,
+      "Start time",
+      clearOnEmpty,
+    );
+    if (!startParsed.ok) {
+      setLocalError(startParsed.error);
+      return;
     }
 
-    const notes =
-      form.notes.trim().length > 0 ? form.notes.trim() : undefined;
+    const notes = optionalTrim(form.notes);
 
     if (mode.kind === "create") {
       const body: Record<string, unknown> = {
@@ -105,8 +96,8 @@ export function NoteForm(props: NoteFormProps) {
         title,
         details: {},
       };
-      if (typeof startAt === "string") {
-        body["startAt"] = startAt;
+      if (typeof startParsed.value === "string") {
+        body["startAt"] = startParsed.value;
       }
       if (notes !== undefined) {
         body["notes"] = notes;
@@ -122,7 +113,7 @@ export function NoteForm(props: NoteFormProps) {
 
     const patch: Record<string, unknown> = {
       title,
-      startAt,
+      startAt: startParsed.value,
       notes: notes ?? "",
     };
     const decoded = decodeUpdateItem(patch);

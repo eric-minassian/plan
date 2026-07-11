@@ -13,15 +13,15 @@ import {
   parseOptionalInstant,
 } from "./form-utils.ts";
 
-export type FlightFormMode =
+export type ActivityFormMode =
   | { readonly kind: "create" }
   | {
       readonly kind: "edit";
-      readonly item: Extract<ItineraryItem, { readonly type: "flight" }>;
+      readonly item: Extract<ItineraryItem, { readonly type: "activity" }>;
     };
 
-export interface FlightFormProps {
-  readonly mode: FlightFormMode;
+export interface ActivityFormProps {
+  readonly mode: ActivityFormMode;
   readonly tripTimezone: string;
   readonly submitting: boolean;
   readonly error: string | undefined;
@@ -36,13 +36,11 @@ export interface FlightFormProps {
 
 interface FormState {
   title: string;
-  flightNumber: string;
-  airlineCode: string;
-  airlineName: string;
-  departureAirport: string;
-  arrivalAirport: string;
+  category: string;
+  venueName: string;
+  bookingUrl: string;
+  bookingReference: string;
   confirmationCode: string;
-  seat: string;
   notes: string;
   startAtLocal: string;
   endAtLocal: string;
@@ -51,13 +49,11 @@ interface FormState {
 function emptyState(): FormState {
   return {
     title: "",
-    flightNumber: "",
-    airlineCode: "",
-    airlineName: "",
-    departureAirport: "",
-    arrivalAirport: "",
+    category: "",
+    venueName: "",
+    bookingUrl: "",
+    bookingReference: "",
     confirmationCode: "",
-    seat: "",
     notes: "",
     startAtLocal: "",
     endAtLocal: "",
@@ -65,31 +61,24 @@ function emptyState(): FormState {
 }
 
 function stateFromItem(
-  item: Extract<ItineraryItem, { readonly type: "flight" }>,
+  item: Extract<ItineraryItem, { readonly type: "activity" }>,
   tripTimezone: string,
 ): FormState {
   return {
     title: item.title,
-    flightNumber: item.details.flightNumber,
-    airlineCode: item.details.airlineCode ?? "",
-    airlineName: item.details.airlineName ?? "",
-    departureAirport: item.details.departureAirport ?? "",
-    arrivalAirport: item.details.arrivalAirport ?? "",
+    category: item.details.category ?? "",
+    venueName: item.details.venueName ?? "",
+    bookingUrl: item.details.bookingUrl ?? "",
+    bookingReference: item.details.bookingReference ?? "",
     confirmationCode: item.confirmationCode ?? "",
-    seat: item.details.seat ?? "",
     notes: item.notes ?? "",
     startAtLocal: instantToWallClockLocal(item.startAt, tripTimezone),
     endAtLocal: instantToWallClockLocal(item.endAt, tripTimezone),
   };
 }
 
-/**
- * Manual flight create / edit form (PR 8b).
- *
- * Parent remounts via `key` when opening a new session — no `useEffect`
- * reset on `mode` object identity.
- */
-export function FlightForm(props: FlightFormProps) {
+/** Activity create / edit form. Parent remounts via `key` on new sessions. */
+export function ActivityForm(props: ActivityFormProps) {
   const { mode, tripTimezone, submitting, error, onCancel, onCreate, onUpdate } =
     props;
   const [form, setForm] = useState<FormState>(() =>
@@ -104,13 +93,8 @@ export function FlightForm(props: FlightFormProps) {
     setLocalError(undefined);
 
     const title = form.title.trim();
-    const flightNumber = form.flightNumber.trim();
     if (title.length === 0) {
       setLocalError("Title is required");
-      return;
-    }
-    if (flightNumber.length === 0) {
-      setLocalError("Flight number is required");
       return;
     }
 
@@ -118,7 +102,7 @@ export function FlightForm(props: FlightFormProps) {
     const startParsed = parseOptionalInstant(
       form.startAtLocal,
       tripTimezone,
-      "Departure time",
+      "Start time",
       clearOnEmpty,
     );
     if (!startParsed.ok) {
@@ -128,7 +112,7 @@ export function FlightForm(props: FlightFormProps) {
     const endParsed = parseOptionalInstant(
       form.endAtLocal,
       tripTimezone,
-      "Arrival time",
+      "End time",
       clearOnEmpty,
     );
     if (!endParsed.ok) {
@@ -136,40 +120,20 @@ export function FlightForm(props: FlightFormProps) {
       return;
     }
 
-    const details: Record<string, string> = { flightNumber };
+    const details: Record<string, string> = {};
     assignOptionalDetails(details, [
-      ["airlineCode", form.airlineCode],
-      ["airlineName", form.airlineName],
-      ["departureAirport", form.departureAirport],
-      ["arrivalAirport", form.arrivalAirport],
-      ["seat", form.seat],
+      ["category", form.category],
+      ["venueName", form.venueName],
+      ["bookingUrl", form.bookingUrl],
+      ["bookingReference", form.bookingReference],
     ]);
-    // Preserve detail keys not exposed in the form (full details replace).
-    if (mode.kind === "edit") {
-      const existing = mode.item.details;
-      if (existing.departureTerminal !== undefined) {
-        details["departureTerminal"] = existing.departureTerminal;
-      }
-      if (existing.arrivalTerminal !== undefined) {
-        details["arrivalTerminal"] = existing.arrivalTerminal;
-      }
-      if (existing.bookingReference !== undefined) {
-        details["bookingReference"] = existing.bookingReference;
-      }
-      if (existing.cabin !== undefined) {
-        details["cabin"] = existing.cabin;
-      }
-      if (existing.operatedBy !== undefined) {
-        details["operatedBy"] = existing.operatedBy;
-      }
-    }
 
     const confirmationCode = optionalTrim(form.confirmationCode);
     const notes = optionalTrim(form.notes);
 
     if (mode.kind === "create") {
       const body: Record<string, unknown> = {
-        type: "flight",
+        type: "activity",
         title,
         details,
       };
@@ -215,7 +179,7 @@ export function FlightForm(props: FlightFormProps) {
   return (
     <form className="form item-form" onSubmit={(e) => void onSubmit(e)}>
       <h3 className="item-form__title">
-        {mode.kind === "create" ? "Add flight" : "Edit flight"}
+        {mode.kind === "create" ? "Add activity" : "Edit activity"}
       </h3>
       {displayError !== undefined ? (
         <p className="banner banner--error" role="alert">
@@ -235,86 +199,55 @@ export function FlightForm(props: FlightFormProps) {
           onChange={(e) => {
             setForm((f) => ({ ...f, title: e.target.value }));
           }}
-          placeholder="UA 100 SFO → JFK"
+          placeholder="Louvre visit"
         />
       </label>
 
       <div className="form__row">
         <label className="field">
-          <span className="field__label">Flight number</span>
+          <span className="field__label">Category</span>
           <input
             className="field__input"
             type="text"
-            name="flightNumber"
-            required
-            value={form.flightNumber}
+            name="category"
+            value={form.category}
             onChange={(e) => {
-              setForm((f) => ({ ...f, flightNumber: e.target.value }));
+              setForm((f) => ({ ...f, category: e.target.value }));
             }}
-            placeholder="100"
+            placeholder="Museum"
           />
         </label>
         <label className="field">
-          <span className="field__label">Airline code</span>
+          <span className="field__label">Venue</span>
           <input
             className="field__input"
             type="text"
-            name="airlineCode"
-            value={form.airlineCode}
+            name="venueName"
+            value={form.venueName}
             onChange={(e) => {
-              setForm((f) => ({ ...f, airlineCode: e.target.value }));
+              setForm((f) => ({ ...f, venueName: e.target.value }));
             }}
-            placeholder="UA"
           />
         </label>
       </div>
 
       <label className="field">
-        <span className="field__label">Airline name</span>
+        <span className="field__label">Booking URL</span>
         <input
           className="field__input"
-          type="text"
-          name="airlineName"
-          value={form.airlineName}
+          type="url"
+          name="bookingUrl"
+          value={form.bookingUrl}
           onChange={(e) => {
-            setForm((f) => ({ ...f, airlineName: e.target.value }));
+            setForm((f) => ({ ...f, bookingUrl: e.target.value }));
           }}
-          placeholder="United Airlines"
+          placeholder="https://"
         />
       </label>
 
       <div className="form__row">
         <label className="field">
-          <span className="field__label">From (IATA)</span>
-          <input
-            className="field__input"
-            type="text"
-            name="departureAirport"
-            value={form.departureAirport}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, departureAirport: e.target.value }));
-            }}
-            placeholder="SFO"
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">To (IATA)</span>
-          <input
-            className="field__input"
-            type="text"
-            name="arrivalAirport"
-            value={form.arrivalAirport}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, arrivalAirport: e.target.value }));
-            }}
-            placeholder="JFK"
-          />
-        </label>
-      </div>
-
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Departure ({tripTimezone})</span>
+          <span className="field__label">Start ({tripTimezone})</span>
           <input
             className="field__input"
             type="datetime-local"
@@ -326,7 +259,7 @@ export function FlightForm(props: FlightFormProps) {
           />
         </label>
         <label className="field">
-          <span className="field__label">Arrival ({tripTimezone})</span>
+          <span className="field__label">End ({tripTimezone})</span>
           <input
             className="field__input"
             type="datetime-local"
@@ -339,8 +272,7 @@ export function FlightForm(props: FlightFormProps) {
         </label>
       </div>
       <p className="field__hint">
-        Times are in {tripTimezone} (airport-local entry not supported yet).
-        Clear a field to remove that time.
+        Times are in {tripTimezone}. Clear a field to remove that time.
       </p>
 
       <div className="form__row">
@@ -358,16 +290,15 @@ export function FlightForm(props: FlightFormProps) {
           />
         </label>
         <label className="field">
-          <span className="field__label">Seat</span>
+          <span className="field__label">Booking reference</span>
           <input
             className="field__input"
             type="text"
-            name="seat"
-            value={form.seat}
+            name="bookingReference"
+            value={form.bookingReference}
             onChange={(e) => {
-              setForm((f) => ({ ...f, seat: e.target.value }));
+              setForm((f) => ({ ...f, bookingReference: e.target.value }));
             }}
-            placeholder="12A"
           />
         </label>
       </div>
@@ -391,8 +322,8 @@ export function FlightForm(props: FlightFormProps) {
           {submitting
             ? "Saving…"
             : mode.kind === "create"
-              ? "Add flight"
-              : "Save flight"}
+              ? "Add activity"
+              : "Save activity"}
         </button>
         <button
           type="button"
