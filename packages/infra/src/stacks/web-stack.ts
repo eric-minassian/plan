@@ -7,12 +7,30 @@ import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
+import { defaultSpaDomain } from "../hosts.js";
 import { isProdStage, type Stage } from "../stage.js";
 
 const AUTH_ISSUER = "https://auth.ericminassian.com";
 const AUTH_CLIENT_ID = "plan";
-const DEFAULT_PROD_DOMAIN = "plan.ericminassian.com";
-const DEFAULT_STAGING_DOMAIN = "plan-staging.ericminassian.com";
+
+/**
+ * CloudFront Function (viewer-request) for SPA client-side routes.
+ * Rewrites extension-less paths to /index.html so we never need distribution-level
+ * custom error responses (those would also rewrite /api/* 403/404 to HTML).
+ * /api/* uses a separate behavior and never hits this function.
+ */
+export const SPA_ROUTER_FUNCTION_CODE = `
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  // Keep real static files (assets, config.json, favicon, etc.).
+  // Root "/" is handled by defaultRootObject.
+  if (uri !== "/" && uri.indexOf(".") === -1) {
+    request.uri = "/index.html";
+  }
+  return request;
+}
+`.trim();
 
 export interface WebStackProps extends cdk.StackProps {
   readonly stage: Stage;
@@ -41,8 +59,9 @@ export interface WebStackProps extends cdk.StackProps {
 
 /**
  * Web edge: private SPA bucket + CloudFront on the plan host.
- * - Default behavior: S3 SPA (403/404 → /index.html)
- * - `/api/*` → API Gateway HTTP API (same public host for first-party share cookies)
+ * - Default behavior: S3 SPA; viewer-request Function rewrites client routes
+ * - `/api/*` → API Gateway HTTP API (true status codes; no SPA error remapping)
+ * - `/config.json` → S3 with cache disabled
  * - Response headers policy: CSP for self, IdP, MapTiler, docs S3
  * - Runtime `/config.json` (authIssuer, authClientId, mapTilerApiKey placeholder)
  */
@@ -146,6 +165,33 @@ export class WebStack extends cdk.Stack {
       },
     );
 
+    // HSTS only on API paths — do not attach the HTML CSP to JSON responses.
+    const apiResponseHeaders = new cloudfront.ResponseHeadersPolicy(
+      this,
+      "ApiResponseHeaders",
+      {
+        responseHeadersPolicyName: `tripplan-api-${stage}`,
+        comment: "HSTS for /api/* (no CSP — API returns JSON)",
+        securityHeadersBehavior: {
+          strictTransportSecurity: {
+            accessControlMaxAge: cdk.Duration.days(365),
+            includeSubdomains: true,
+            preload: false,
+            override: true,
+          },
+          contentTypeOptions: { override: true },
+        },
+      },
+    );
+
+    const spaRouter = new cloudfront.Function(this, "SpaRouter", {
+      functionName: `tripplan-spa-router-${stage}`,
+      comment:
+        "Rewrite extension-less SPA routes to /index.html (not applied to /api/*)",
+      code: cloudfront.FunctionCode.fromInline(SPA_ROUTER_FUNCTION_CODE),
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+    });
+
     this.distribution = new cloudfront.Distribution(this, "Distribution", {
       comment: `TripPlan SPA + /api proxy (${stage})`,
       defaultRootObject: "index.html",
@@ -167,9 +213,27 @@ export class WebStack extends cdk.Stack {
         compress: true,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         responseHeadersPolicy: spaResponseHeaders,
+        functionAssociations: [
+          {
+            function: spaRouter,
+            eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+          },
+        ],
       },
       additionalBehaviors: {
+        // Runtime config must not sit behind long-lived edge cache.
+        "/config.json": {
+          origin: spaOrigin,
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          compress: true,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: spaResponseHeaders,
+        },
         // Same public host as SPA so share cookies stay first-party.
+        // No custom error responses: API 403/404 must pass through as JSON.
         "/api/*": {
           origin: apiOrigin,
           viewerProtocolPolicy:
@@ -181,28 +245,17 @@ export class WebStack extends cdk.Stack {
           // Forward auth / DPoP / content headers; Host must be execute-api.
           originRequestPolicy:
             cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: apiResponseHeaders,
         },
       },
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: "/index.html",
-          ttl: cdk.Duration.seconds(0),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: "/index.html",
-          ttl: cdk.Duration.seconds(0),
-        },
-      ],
+      // Intentionally no distribution errorResponses mapping 403/404 → index.html.
+      // That remaps /api/* errors. SPA routing is handled by SpaRouter Function.
     });
 
     this.distributionDomainName = this.distribution.distributionDomainName;
 
     // Runtime config for the SPA (not baked into the JS bundle).
-    // mapTilerApiKey is a placeholder — replace after deploy or via CI asset sync.
+    // mapTilerApiKey is a placeholder — replace after deploy (exclude from s3 sync).
     new s3deploy.BucketDeployment(this, "RuntimeConfig", {
       sources: [
         s3deploy.Source.data(
@@ -224,6 +277,11 @@ export class WebStack extends cdk.Stack {
       // Do not prune — SPA static assets are uploaded by a separate build step.
       prune: false,
       memoryLimit: 128,
+      contentType: "application/json",
+      cacheControl: [
+        s3deploy.CacheControl.noCache(),
+        s3deploy.CacheControl.mustRevalidate(),
+      ],
     });
 
     if (
@@ -303,14 +361,7 @@ export function resolveWebDomain(
     const trimmed = override.trim();
     return trimmed === "" ? undefined : trimmed;
   }
-  switch (stage) {
-    case "prod":
-      return DEFAULT_PROD_DOMAIN;
-    case "staging":
-      return DEFAULT_STAGING_DOMAIN;
-    case "dev":
-      return undefined;
-  }
+  return defaultSpaDomain(stage);
 }
 
 export function buildContentSecurityPolicy(

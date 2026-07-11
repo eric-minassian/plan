@@ -60,9 +60,10 @@ Single public host topology: SPA + API under one origin so share cookies stay fi
 | Path | Origin |
 |------|--------|
 | `/*` (default) | SPA S3 bucket via Origin Access Control |
+| `/config.json` | SPA S3, **cache disabled** (runtime config) |
 | `/api/*` | API Gateway HTTP API (`HttpApiUrl` from ApiStack) |
 
-SPA routing: CloudFront custom error responses map **403** and **404** → `/index.html` (HTTP 200).
+SPA routing: a **CloudFront Function** (viewer-request on the default behavior only) rewrites extension-less paths to `/index.html`. Distribution-level custom error responses are **not** used — they would also rewrite `/api/*` 403/404 into HTML. API status codes pass through unchanged (`GET /api/v1/does-not-exist` must stay JSON 404).
 
 ### Domain defaults (stage-aware)
 
@@ -138,15 +139,30 @@ WebStack deploys `/config.json` to the SPA bucket (BucketDeployment, `prune: fal
 }
 ```
 
-Fill `mapTilerApiKey` (referrer-restricted browser key) after deploy or via your static-asset pipeline. SPA static files (`index.html`, assets) are **not** deployed by CDK — build `@tripplan/web` and sync `dist/` to `SpaBucketName`, then invalidate the distribution.
+Fill `mapTilerApiKey` (referrer-restricted browser key) after deploy (or a post-sync write). SPA static files (`index.html`, assets) are **not** deployed by CDK — build `@tripplan/web` and sync `dist/` to `SpaBucketName`, then invalidate the distribution.
+
+`/config.json` is also served with CloudFront **CACHING_DISABLED** and S3 `Cache-Control: no-cache, must-revalidate` so key rotations are not stuck at the edge.
 
 ### Deploy SPA assets
 
+Always **exclude** `config.json` from `s3 sync --delete` so WebStack/ops-managed runtime config (MapTiler browser key) is not overwritten by `public/config.json` from the build:
+
 ```bash
 pnpm --filter @tripplan/web build
-# aws s3 sync packages/web/dist s3://$SPA_BUCKET/ --delete
-# keep config.json if you manage the MapTiler key outside the build
-# aws cloudfront create-invalidation --distribution-id $DIST_ID --paths '/*'
+
+aws s3 sync packages/web/dist "s3://${SPA_BUCKET}/" \
+  --delete \
+  --exclude config.json \
+  --exclude 'config.json/*'
+
+# Optional: set MapTiler key after first deploy (or when rotating)
+# aws s3 cp config.prod.json "s3://${SPA_BUCKET}/config.json" \
+#   --content-type application/json \
+#   --cache-control 'no-cache, must-revalidate'
+
+aws cloudfront create-invalidation \
+  --distribution-id "${DIST_ID}" \
+  --paths '/*'
 ```
 
 ## Outputs
@@ -193,7 +209,9 @@ aws secretsmanager put-secret-value \
 
 - Encryption: SSE-S3
 - Block all public access; SSL enforced
-- CORS (stage-driven list): `https://plan.ericminassian.com`, `http://localhost:5173` (GET/PUT/HEAD); staging host can be added in `docsCorsOrigins` when available
+- CORS (stage-driven via shared `docsCorsOrigins` in `hosts.ts`, GET/PUT/HEAD):
+  - **prod / dev:** `https://plan.ericminassian.com`, `http://localhost:5173`
+  - **staging:** `https://plan-staging.ericminassian.com`, prod SPA, Vite local
 - Object keys (design / PR14): `trips/{tripId}/items/{itemId}/{attachmentId}` — **no** `pending/` prefix
 - Lifecycle:
   - abort incomplete multipart after 7 days
