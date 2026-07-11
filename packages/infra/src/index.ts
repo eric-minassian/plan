@@ -1,5 +1,17 @@
 /**
- * @tripplan/infra — AWS CDK stacks (scaffold).
- * Foundation, data, API, web, and observability stacks land in follow-up PRs.
+ * @tripplan/infra — AWS CDK stacks for TripPlan (us-east-1).
+ *
+ * Current: FoundationStack + DataStack.
+ * Later: ApiStack, WebStack, ObservabilityStack (no Cognito/AuthStack).
  */
-export const INFRA_PACKAGE = "@tripplan/infra" as const;
+export { DataStack, type DataStackProps } from "./stacks/data-stack.js";
+export {
+  FoundationStack,
+  type FoundationStackProps,
+} from "./stacks/foundation-stack.js";
+export {
+  isProdStage,
+  resolveStage,
+  STAGES,
+  type Stage,
+} from "./stage.js";
