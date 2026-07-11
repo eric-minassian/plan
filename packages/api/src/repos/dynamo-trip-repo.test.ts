@@ -486,4 +486,43 @@ describe("buildItemPatchUpdateExpression never writes sortKey", () => {
     expect(parts.updateExpression).not.toContain(":startAt");
     expect(parts.updateExpression).not.toContain(":endAt");
   });
+
+  it("null startLocation/endLocation emit REMOVE clauses", async () => {
+    const { buildItemPatchUpdateExpression, applyItemPatch } = await import(
+      "./item-build.js"
+    );
+    const existing = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "hotel" as const,
+      title: "Stay",
+      details: { propertyName: "Hotel" },
+      startLocation: {
+        lat: 48.86,
+        lng: 2.34,
+        label: "Hotel",
+        placeId: "poi.1",
+      },
+      endLocation: { lat: 48.87, lng: 2.35, label: "Other" },
+      sortKey: 1000,
+      version: 1,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+    };
+    const parts = buildItemPatchUpdateExpression(
+      existing,
+      { startLocation: null, endLocation: null },
+      1,
+      "2026-07-10T13:00:00Z",
+    );
+    expect(parts.updateExpression).toMatch(
+      /REMOVE startLocation, endLocation|REMOVE endLocation, startLocation/,
+    );
+    const patched = applyItemPatch(existing, {
+      startLocation: null,
+      endLocation: null,
+    });
+    expect(patched.startLocation).toBeUndefined();
+    expect(patched.endLocation).toBeUndefined();
+  });
 });

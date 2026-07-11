@@ -22,7 +22,6 @@ function baseRequest(
     cookies: partial.cookies ?? {},
     body: partial.body,
     requestId: partial.requestId ?? "test-request-id",
-    clientIp: partial.clientIp ?? "127.0.0.1",
   };
 }
 

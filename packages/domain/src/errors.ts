@@ -10,7 +10,6 @@ export const ApiErrorType = S.Literal(
   "ValidationError",
   "MethodNotAllowed",
   "Conflict",
-  "Gone",
   "PayloadTooLarge",
   "RateLimited",
   "UpstreamUnavailable",
@@ -27,7 +26,6 @@ export const ErrorCode = {
   ValidationError: "ValidationError",
   MethodNotAllowed: "MethodNotAllowed",
   Conflict: "Conflict",
-  Gone: "Gone",
   PayloadTooLarge: "PayloadTooLarge",
   RateLimited: "RateLimited",
   UpstreamUnavailable: "UpstreamUnavailable",
@@ -40,7 +38,6 @@ export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 /**
  * Default HTTP status for each error type.
  * Enrichment “schedule not found” is a 200 success DTO, not this envelope.
- * Gone (410): share access when the underlying trip is deleted/deleting.
  */
 export const ErrorHttpStatus: Record<ApiErrorType, number> = {
   ValidationError: 400,
@@ -49,7 +46,6 @@ export const ErrorHttpStatus: Record<ApiErrorType, number> = {
   NotFound: 404,
   MethodNotAllowed: 405,
   Conflict: 409,
-  Gone: 410,
   PayloadTooLarge: 413,
   AmbiguousEnrichment: 422,
   RateLimited: 429,

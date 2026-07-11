@@ -39,12 +39,10 @@ export {
 export {
   ShareAuth,
   SHARE_COOKIE_NAME,
-  makeShareAuth,
   makeShareAuthStub,
   type ShareAuthService,
   type SharePrincipal,
 } from "./auth/share-auth.js";
-export { CurrentShare } from "./auth/current-share.js";
 export { AppError, appErrorToHttpResponse } from "./errors/app-error.js";
 export {
   UserRepo,
@@ -60,12 +58,6 @@ export {
   type ListTripsResult,
 } from "./repos/trip-repo.js";
 export { makeDynamoTripRepo } from "./repos/dynamo-trip-repo.js";
-export {
-  ShareRepo,
-  makeInMemoryShareRepo,
-  type ShareRepository,
-} from "./repos/share-repo.js";
-export { makeDynamoShareRepo } from "./repos/dynamo-share-repo.js";
 export type {
   AuthClass,
   HttpRequest,

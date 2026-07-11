@@ -6,9 +6,7 @@ info:
   description: |
     TripPlan HTTP API. Owner auth is external OIDC at
     auth.ericminassian.com via in-Lambda verification (no Cognito).
-    Share access is capability-based: high-entropy token → HttpOnly cookie
-    `tripplan_share` (first-party on the plan host). Raw tokens accepted only on
-    POST /share/session; grants revalidated on every share request.
+    Share session routes are reserved for a later PR.
 servers:
   - url: https://plan.ericminassian.com
     description: Production (CloudFront → API Gateway)
@@ -19,8 +17,6 @@ tags:
     description: No JWT required
   - name: Owner
     description: OIDC access token (Bearer / DPoP auto)
-  - name: Share
-    description: Share session cookie (tripplan_share); no owner JWT
 paths:
   /api/v1/health:
     get:
@@ -417,160 +413,172 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-  /api/v1/trips/{tripId}/shares:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
+  /api/v1/enrich/flight:
     post:
-      operationId: createShare
+      operationId: enrichFlight
       tags: [Owner]
-      summary: Create share grant
+      summary: Flight schedule enrichment
       description: |
-        Creates a time-bounded share grant. Raw capability token returned **once**.
-        Client builds `origin + path + "#" + token`. Server never returns a full URL
-        containing the token. Token stored as SHA-256 hash only.
-        `expiresAt` optional (default now+30d); must be future and ≤ now+365d.
+        Lookup flight schedule by number + civil date. **Owner JWT required**
+        (never public). Suggest-then-confirm: returns a prefill DTO; does **not**
+        write itinerary items. Schedule not found is **200** with
+        `{ status: "not_found" }` (not ApiErrorBody). Ambiguous matches → 422
+        `AmbiguousEnrichment`. Live provider is AeroDataBox when
+        `enrichment.flight.live` / `ENRICHMENT_FLIGHT_LIVE` is true; default is
+        mock. Per-user rate limit (default 60/hour) and monthly $ budget apply.
       security:
         - ownerBearer: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateShareGrant"
-      responses:
-        "201":
-          description: Grant created; raw token returned once
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CreateShareResponse"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    get:
-      operationId: listShares
-      tags: [Owner]
-      summary: List share grants
-      description: List grants for the trip (no raw tokens or token hashes).
-      security:
-        - ownerBearer: []
-      responses:
-        "200":
-          description: Share grants
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ShareListResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/v1/trips/{tripId}/shares/{shareId}:
-    parameters:
-      - $ref: "#/components/parameters/tripId"
-      - $ref: "#/components/parameters/shareId"
-    delete:
-      operationId: revokeShare
-      tags: [Owner]
-      summary: Revoke share grant
-      description: |
-        Sets revoked=true and deletes all sessions for this shareId (GSI4 only).
-        Subsequent share requests with those sessions return 401.
-      security:
-        - ownerBearer: []
-      responses:
-        "204":
-          description: Revoked
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/v1/share/session:
-    post:
-      operationId: createShareSession
-      tags: [Public]
-      summary: Exchange share token for session cookie
-      description: |
-        Hash the raw token, look up grant (GSI2), check revoked/expiry/trip status.
-        On success sets HttpOnly Secure SameSite=Lax cookie `tripplan_share`.
-        Rate limited (20 attempts/hour/IP). Origin checked when configured.
-        v1: a new exchange replaces any previous share session cookie.
-      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateShareSession"
+              $ref: "#/components/schemas/EnrichFlightRequest"
+            examples:
+              ua100:
+                summary: United 100
+                value:
+                  flightNumber: "UA100"
+                  date: "2026-07-15"
+                  departureAirportHint: "SFO"
       responses:
-        "204":
-          description: Session created; Set-Cookie tripplan_share
-          headers:
-            Set-Cookie:
+        "200":
+          description: |
+            Enrichment suggestion (found / cancelled) or not_found success DTO.
+          content:
+            application/json:
               schema:
-                type: string
-              description: tripplan_share=…; HttpOnly; Secure; SameSite=Lax; Path=/
+                $ref: "#/components/schemas/FlightEnrichmentResponse"
+              examples:
+                found:
+                  summary: Schedule found
+                  value:
+                    status: found
+                    airlineCode: UA
+                    airlineName: United Airlines
+                    flightNumber: "100"
+                    departure:
+                      airportIata: SFO
+                      airportName: San Francisco International Airport
+                      scheduledAt: "2026-07-15T08:00:00-07:00"
+                      lat: 37.6213
+                      lng: -122.379
+                      timezone: America/Los_Angeles
+                    arrival:
+                      airportIata: JFK
+                      scheduledAt: "2026-07-15T16:30:00-04:00"
+                      lat: 40.6413
+                      lng: -73.7781
+                      timezone: America/New_York
+                    provider: mock
+                    fetchedAt: "2026-07-11T12:00:00Z"
+                    confidence: 0.95
+                not_found:
+                  summary: Schedule not found (still HTTP 200)
+                  value:
+                    status: not_found
+                    provider: mock
+                    fetchedAt: "2026-07-11T12:00:00Z"
         "400":
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "403":
-          description: Origin not allowed
+        "422":
+          description: Ambiguous enrichment (multiple candidates)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBody"
         "429":
-          description: Rate limited
+          description: Per-user enrich rate limit exceeded
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBody"
-      # Note: exchange returns 401 (not 410) when the trip is deleted so token
-      # probes cannot oracle “was a real grant for a now-gone trip”. 410 is used
-      # only on authenticated share GETs after a session is established.
-    delete:
-      operationId: deleteShareSession
-      tags: [Share]
-      summary: Clear share session
-      description: Deletes the session and clears the tripplan_share cookie.
-      security:
-        - shareCookie: []
-      responses:
-        "204":
-          description: Session cleared
-          headers:
-            Set-Cookie:
-              schema:
-                type: string
-              description: Cleared tripplan_share cookie (Max-Age=0)
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /api/v1/share/trip:
-    get:
-      operationId: getShareTrip
-      tags: [Share]
-      summary: Read-only shared trip
-      description: |
-        Returns ShareTripDTO (meta + items, no attachments in this version).
-        Revalidates grant + trip every request; 410 if trip deleted/deleting;
-        401 if grant revoked/expired or session missing.
-      security:
-        - shareCookie: []
-      responses:
-        "200":
-          description: Share trip DTO
+        "502":
+          description: Upstream unavailable or monthly budget exceeded
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ShareTripDTO"
+                $ref: "#/components/schemas/ApiErrorBody"
+  /api/v1/enrich/place:
+    post:
+      operationId: enrichPlace
+      tags: [Owner]
+      summary: Place search enrichment
+      description: |
+        Typeahead place search for hotels, activities, and other locations.
+        **Owner JWT required** (never public). Suggest-then-confirm: returns
+        prefill suggestions (label, address, lat/lng, placeId); does **not**
+        write itinerary items. Empty matches are **200** with
+        `{ status: "not_found", results: [] }` (not ApiErrorBody). Live provider
+        is **MapTiler only** when `enrichment.places.live` /
+        `ENRICHMENT_PLACES_LIVE` is true; default is mock. No Google Places.
+        Per-user rate limit (default 60/hour, shared with flight enrich) and
+        monthly $ budget apply.
+      security:
+        - ownerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichPlaceRequest"
+            examples:
+              louvre:
+                summary: Museum search
+                value:
+                  query: "Louvre"
+                  proximity:
+                    lat: 48.8566
+                    lng: 2.3522
+                  limit: 5
+      responses:
+        "200":
+          description: |
+            Place suggestions (found) or not_found success DTO with empty results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaceEnrichmentResponse"
+              examples:
+                found:
+                  summary: Results found
+                  value:
+                    status: found
+                    results:
+                      - placeId: poi.123
+                        label: Louvre Museum
+                        address: "Louvre Museum, Rue de Rivoli, Paris, France"
+                        lat: 48.8606
+                        lng: 2.3376
+                        types: [poi]
+                        confidence: 0.99
+                    provider: mock
+                    fetchedAt: "2026-07-11T12:00:00Z"
+                not_found:
+                  summary: No matches (still HTTP 200)
+                  value:
+                    status: not_found
+                    results: []
+                    provider: mock
+                    fetchedAt: "2026-07-11T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "410":
-          $ref: "#/components/responses/Gone"
+        "429":
+          description: Per-user enrich rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBody"
+        "502":
+          description: Upstream unavailable or monthly budget exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBody"
 components:
   securitySchemes:
     ownerBearer:
@@ -580,11 +588,6 @@ components:
       description: |
         OIDC access token from auth.ericminassian.com (audience `plan`).
         DPoP-bound tokens must include a valid DPoP proof (mode auto).
-    shareCookie:
-      type: apiKey
-      in: cookie
-      name: tripplan_share
-      description: Opaque share session id set by POST /share/session
   parameters:
     tripId:
       name: tripId
@@ -594,12 +597,6 @@ components:
         type: string
     itemId:
       name: itemId
-      in: path
-      required: true
-      schema:
-        type: string
-    shareId:
-      name: shareId
       in: path
       required: true
       schema:
@@ -625,12 +622,6 @@ components:
             $ref: "#/components/schemas/ApiErrorBody"
     Conflict:
       description: Optimistic concurrency conflict (version mismatch)
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ApiErrorBody"
-    Gone:
-      description: Trip deleted/deleting (share revalidation)
       content:
         application/json:
           schema:
@@ -796,7 +787,8 @@ components:
       description: |
         Partial patch. Do not send `type` (immutable) or `expectedVersion` (use If-Match).
         When `details` is present it fully replaces details for the stored type.
-        `startAt` / `endAt`: Instant string to set, JSON `null` to clear, omit to leave.
+        `startAt` / `endAt` / `startLocation` / `endLocation` / `enrichment`:
+        value to set, JSON `null` to clear, omit to leave.
       properties:
         title:
           type: string
@@ -816,10 +808,14 @@ components:
           type: string
         startLocation:
           type: object
+          nullable: true
           additionalProperties: true
+          description: GeoPoint to set, or null to clear map pin
         endLocation:
           type: object
+          nullable: true
           additionalProperties: true
+          description: GeoPoint to set, or null to clear map pin
         notes:
           type: string
           maxLength: 5000
@@ -828,7 +824,11 @@ components:
           maxLength: 64
         enrichment:
           type: object
+          nullable: true
           additionalProperties: true
+          description: |
+            Enrichment meta to set, or JSON `null` to clear stored enrichment
+            (e.g. after a failed re-lookup). Omit to leave unchanged.
         details:
           type: object
           additionalProperties: true
@@ -923,100 +923,180 @@ components:
           type: string
         version:
           type: integer
-    CreateShareGrant:
+    EnrichFlightRequest:
       type: object
       additionalProperties: false
+      required: [flightNumber, date]
       properties:
-        label:
-          type: string
-          maxLength: 80
-          description: Optional human label (e.g. Family)
-        expiresAt:
-          type: string
-          description: |
-            ISO Instant. Omit for default now+30 days. Must be strictly in the
-            future and ≤ now+365 days.
-    CreateShareResponse:
-      type: object
-      additionalProperties: false
-      required: [shareId, token, path, expiresAt, label]
-      properties:
-        shareId:
-          type: string
-        token:
-          type: string
-          description: Raw capability token — returned once; never logged
-        path:
-          type: string
-          const: /s
-        expiresAt:
-          type: string
-        label:
-          type: string
-    ShareGrantPublic:
-      type: object
-      additionalProperties: false
-      required: [shareId, tripId, expiresAt, revoked, label]
-      properties:
-        shareId:
-          type: string
-        tripId:
-          type: string
-        expiresAt:
-          type: string
-        revoked:
-          type: boolean
-        label:
-          type: string
-    ShareListResponse:
-      type: object
-      additionalProperties: false
-      required: [shares]
-      properties:
-        shares:
-          type: array
-          items:
-            $ref: "#/components/schemas/ShareGrantPublic"
-    CreateShareSession:
-      type: object
-      additionalProperties: false
-      required: [token]
-      properties:
-        token:
+        flightNumber:
           type: string
           minLength: 1
-          maxLength: 128
-          description: Raw share capability token from the hash fragment (~43 base64url chars)
-    ShareTripDTO:
+          maxLength: 16
+          description: Airline designator + number (e.g. UA100 or UA 100)
+        date:
+          $ref: "#/components/schemas/CivilDate"
+        departureAirportHint:
+          type: string
+          pattern: '^[A-Za-z]{3}$'
+          description: Optional departure IATA to disambiguate
+    FlightEndpointSuggestion:
+      type: object
+      additionalProperties: false
+      required: [airportIata, scheduledAt]
+      properties:
+        airportIata:
+          type: string
+        airportName:
+          type: string
+        scheduledAt:
+          type: string
+          description: Canonical Instant (ISO-8601 second precision with zone)
+        terminal:
+          type: string
+        gate:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        timezone:
+          type: string
+    FlightEnrichmentFound:
       type: object
       additionalProperties: false
       required:
-        - tripId
-        - title
-        - timezone
-        - startDate
-        - endDate
-        - ownerDisplayName
-        - items
+        - status
+        - flightNumber
+        - departure
+        - arrival
+        - provider
+        - fetchedAt
       properties:
-        tripId:
+        status:
           type: string
-        title:
+          enum: [found, cancelled]
+        airlineCode:
           type: string
-        timezone:
+        airlineName:
           type: string
-        startDate:
-          $ref: "#/components/schemas/CivilDate"
-        endDate:
-          $ref: "#/components/schemas/CivilDate"
-        ownerDisplayName:
+        flightNumber:
           type: string
-          description: Owner display name only (no ownerId)
-        items:
+        departure:
+          $ref: "#/components/schemas/FlightEndpointSuggestion"
+        arrival:
+          $ref: "#/components/schemas/FlightEndpointSuggestion"
+        provider:
+          type: string
+          description: mock | aerodatabox
+        fetchedAt:
+          type: string
+        confidence:
+          type: number
+        operatedBy:
+          type: string
+    FlightEnrichmentNotFound:
+      type: object
+      additionalProperties: false
+      required: [status, provider, fetchedAt]
+      properties:
+        status:
+          type: string
+          const: not_found
+        provider:
+          type: string
+        fetchedAt:
+          type: string
+    FlightEnrichmentResponse:
+      oneOf:
+        - $ref: "#/components/schemas/FlightEnrichmentFound"
+        - $ref: "#/components/schemas/FlightEnrichmentNotFound"
+      description: |
+        Success body for POST /enrich/flight. `not_found` is HTTP 200 (not
+        ApiErrorBody) so clients do not confuse it with resource 404.
+    EnrichPlaceRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: |
+            Free-text place query for typeahead. Whitespace-only is rejected;
+            leading/trailing whitespace is trimmed.
+        proximity:
+          type: object
+          additionalProperties: false
+          required: [lat, lng]
+          description: Optional proximity bias (prefer nearby results)
+          properties:
+            lat:
+              type: number
+              minimum: -90
+              maximum: 90
+            lng:
+              type: number
+              minimum: -180
+              maximum: 180
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: Max results (providers default when omitted)
+        language:
+          type: string
+          minLength: 2
+          maxLength: 5
+          description: Prefer results in this ISO 639-1 language
+    PlaceSuggestion:
+      type: object
+      additionalProperties: false
+      required: [placeId, label, lat, lng]
+      properties:
+        placeId:
+          type: string
+        label:
+          type: string
+          description: Primary display name
+        address:
+          type: string
+          description: Formatted address / hierarchy
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+        lng:
+          type: number
+          minimum: -180
+          maximum: 180
+        types:
           type: array
           items:
-            $ref: "#/components/schemas/ItineraryItem"
-          description: Items only; attachment metadata added in a later PR
+            type: string
+        confidence:
+          type: number
+          description: Match quality 0–1 when provided by vendor
+    PlaceEnrichmentResponse:
+      type: object
+      additionalProperties: false
+      required: [status, results, provider, fetchedAt]
+      properties:
+        status:
+          type: string
+          enum: [found, not_found]
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlaceSuggestion"
+        provider:
+          type: string
+          description: mock | maptiler
+        fetchedAt:
+          type: string
+      description: |
+        Success body for POST /enrich/place. `not_found` is HTTP 200 with empty
+        `results` (not ApiErrorBody).
     ApiErrorBody:
       type: object
       additionalProperties: false
@@ -1031,7 +1111,6 @@ components:
             - ValidationError
             - MethodNotAllowed
             - Conflict
-            - Gone
             - PayloadTooLarge
             - RateLimited
             - UpstreamUnavailable

@@ -8,6 +8,7 @@ import {
   OutputFormat,
 } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
+import type * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import type { Construct } from "constructs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,17 @@ export interface ApiStackProps extends cdk.StackProps {
   readonly table: dynamodb.ITable;
   /** Optional log retention from FoundationStack (defaults by stage). */
   readonly logRetention?: logs.RetentionDays;
+  /**
+   * MapTiler server secret (FoundationStack). When set, grants read and injects
+   * `MAPTILER_API_KEY` for live place geocoding. Live flag still defaults off
+   * (`ENRICHMENT_PLACES_LIVE`) until ops enables it.
+   */
+  readonly mapTilerSecret?: secretsmanager.ISecret;
+  /**
+   * AeroDataBox secret (FoundationStack). When set, grants read and injects
+   * `AERODATABOX_API_KEY` / `AERODATABOX_HOST` for live flight enrich.
+   */
+  readonly aeroDataBoxSecret?: secretsmanager.ISecret;
 }
 
 /**
@@ -62,6 +74,23 @@ export class ApiStack extends cdk.Stack {
 
     const publicApiBaseUrl = publicApiBaseUrlForStage(stage);
 
+    // Live enrich flags default false (mock). Ops can flip via Lambda env /
+    // parameter after secrets are filled — CDK does not force live on.
+    const secretEnv: Record<string, string> = {};
+    if (props.mapTilerSecret !== undefined) {
+      secretEnv["MAPTILER_API_KEY"] = props.mapTilerSecret
+        .secretValueFromJson("apiKey")
+        .unsafeUnwrap();
+    }
+    if (props.aeroDataBoxSecret !== undefined) {
+      secretEnv["AERODATABOX_API_KEY"] = props.aeroDataBoxSecret
+        .secretValueFromJson("apiKey")
+        .unsafeUnwrap();
+      secretEnv["AERODATABOX_HOST"] = props.aeroDataBoxSecret
+        .secretValueFromJson("host")
+        .unsafeUnwrap();
+    }
+
     this.apiFunction = new NodejsFunction(this, "ApiHandler", {
       functionName: `tripplan-api-${stage}`,
       entry: apiHandlerEntry,
@@ -81,6 +110,10 @@ export class ApiStack extends cdk.Stack {
         ...(publicApiBaseUrl !== undefined
           ? { PUBLIC_API_BASE_URL: publicApiBaseUrl }
           : {}),
+        // Mock-default; set true only after vendor TOS + secret fill.
+        ENRICHMENT_PLACES_LIVE: "false",
+        ENRICHMENT_FLIGHT_LIVE: "false",
+        ...secretEnv,
         NODE_OPTIONS: "--enable-source-maps",
       },
       bundling: {
@@ -99,6 +132,10 @@ export class ApiStack extends cdk.Stack {
 
     // R/W for trip meta (and future profile) single-table access.
     table.grantReadWriteData(this.apiFunction);
+
+    // Server-side enrichment secrets (MapTiler places, AeroDataBox flights).
+    props.mapTilerSecret?.grantRead(this.apiFunction);
+    props.aeroDataBoxSecret?.grantRead(this.apiFunction);
 
     this.httpApi = new apigwv2.HttpApi(this, "HttpApi", {
       apiName: `tripplan-${stage}`,
