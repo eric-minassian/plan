@@ -1388,66 +1388,6 @@ export function makeDynamoTripRepo(
         };
         return result;
       }),
-
-    getByTripId: (tripId) =>
-      Effect.tryPromise({
-        try: async () => {
-          const result = await client.send(
-            new QueryCommand({
-              TableName: tableName,
-              IndexName: "GSI1",
-              KeyConditionExpression: "GSI1PK = :pk AND GSI1SK = :sk",
-              ExpressionAttributeValues: {
-                ":pk": gsi1Pk(tripId),
-                ":sk": "META",
-              },
-              Limit: 1,
-            }),
-          );
-          const item = result.Items?.[0];
-          if (item === undefined) {
-            return undefined;
-          }
-          // GSI1 projects core trip attrs; prefer base Get for full consistency.
-          const ownerId = item.ownerId;
-          if (typeof ownerId === "string") {
-            const base = await client.send(
-              new GetCommand({
-                TableName: tableName,
-                Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
-              }),
-            );
-            if (base.Item !== undefined) {
-              return itemToTrip(base.Item as TripItem);
-            }
-          }
-          // Fall back to GSI1 projection shape.
-          return itemToTrip({
-            PK: typeof item.PK === "string" ? item.PK : userPk(String(ownerId)),
-            SK: tripSk(tripId),
-            GSI1PK: gsi1Pk(tripId),
-            GSI1SK: "META",
-            entityType: "TRIP",
-            tripId,
-            ownerId: String(ownerId),
-            title: String(item.title ?? ""),
-            timezone: String(item.timezone ?? "UTC"),
-            startDate: String(item.startDate ?? "1970-01-01"),
-            endDate: String(item.endDate ?? "1970-01-01"),
-            version: typeof item.version === "number" ? item.version : 1,
-            status:
-              item.status === "deleting" || item.status === "deleted"
-                ? item.status
-                : "active",
-            ...(typeof item.deletedAt === "string"
-              ? { deletedAt: item.deletedAt }
-              : {}),
-          });
-        },
-        catch: mapDynamoError,
-      }),
-
-    listItemsByTripId: (tripId) => queryAllItems(tripId),
   };
 }
 

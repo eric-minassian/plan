@@ -372,6 +372,38 @@ a:hover {
   font-weight: 600;
 }
 
+.item-form__lookup {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.85rem 0.9rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.item-form__lookup-legend {
+  padding: 0 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.field--actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.banner--info {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--fg);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
 .day-bucket {
   display: grid;
   gap: 0.65rem;
@@ -483,83 +515,110 @@ a:hover {
   border-color: color-mix(in srgb, #a78bfa 35%, var(--border));
 }
 
-/* Share management + viewer */
-.share-panel__hint {
-  font-size: 0.9rem;
+.item-type--hotel {
+  color: #f0c674;
+  border-color: color-mix(in srgb, #d4a017 40%, var(--border));
 }
 
-.share-panel__create {
-  display: grid;
-  gap: 0.75rem;
+.item-type--activity {
+  color: #e8a0bf;
+  border-color: color-mix(in srgb, #d46b9a 40%, var(--border));
 }
 
-.share-panel__created {
+.location-picker {
   display: grid;
   gap: 0.5rem;
-  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.85rem;
+  padding: 0.75rem 0.85rem 0.9rem;
+  border: 1px dashed var(--border);
   border-radius: 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
-.share-panel__created-title {
-  margin: 0;
-  font-size: 0.9rem;
-}
-
-.share-panel__url {
-  display: block;
-  font-size: 0.8rem;
-  word-break: break-all;
-  padding: 0.5rem 0.65rem;
-  border-radius: 0.4rem;
-  background: var(--input-bg);
-  border: 1px solid var(--border);
-}
-
-.share-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.5rem;
-}
-
-.share-list__item {
+.location-picker__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.65rem 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--bg) 45%, var(--panel));
+  gap: 0.5rem;
 }
 
-.share-list__label {
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-
-.share-list__meta {
-  font-size: 0.8rem;
-  margin-top: 0.15rem;
-}
-
-.share-viewer__badge {
-  margin: 0 0 0.35rem;
-  font-size: 0.75rem;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-}
-
-.share-viewer__owner {
-  margin-top: 0.35rem;
-  font-size: 0.9rem;
-}
-
-.share-viewer__note {
+.location-picker__selected {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   font-size: 0.875rem;
+}
+
+.location-picker__address {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.location-picker__coords {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+}
+
+.location-picker__search {
+  position: relative;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.location-picker__results {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--panel);
+  max-height: 14rem;
+  overflow: auto;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.location-picker__result {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.location-picker__result:hover,
+.location-picker__result:focus-visible,
+.location-picker__result--active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: none;
+}
+
+.location-picker__result-label {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.location-picker__result-address {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

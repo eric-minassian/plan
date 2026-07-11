@@ -6,16 +6,11 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint .",
-    "test:e2e": "playwright test",
-    "test:share": "playwright test tests/share-session.spec.ts",
-    "playwright:install": "playwright install chromium"
+    "lint": "eslint ."
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.0",
     "@tripplan/eslint-config": "workspace:*",
     "@tripplan/tsconfig": "workspace:*",
-    "@types/node": "^22.10.5",
     "eslint": "^9.17.0",
     "typescript": "~5.7.3"
   }

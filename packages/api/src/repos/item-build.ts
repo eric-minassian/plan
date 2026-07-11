@@ -110,11 +110,14 @@ export type ResolvedItemPatchFields = {
   readonly endAt?: string | null;
   readonly startTimeZone?: string;
   readonly endTimeZone?: string;
-  readonly startLocation?: ItineraryItem["startLocation"];
-  readonly endLocation?: ItineraryItem["endLocation"];
+  /** Geo to set, or `null` to REMOVE stored startLocation. */
+  readonly startLocation?: ItineraryItem["startLocation"] | null;
+  /** Geo to set, or `null` to REMOVE stored endLocation. */
+  readonly endLocation?: ItineraryItem["endLocation"] | null;
   readonly notes?: string;
   readonly confirmationCode?: string;
-  readonly enrichment?: ItineraryItem["enrichment"];
+  /** Enrichment meta to set, or `null` to REMOVE stored enrichment. */
+  readonly enrichment?: ItineraryItem["enrichment"] | null;
   readonly details?: ItineraryItem["details"];
 };
 
@@ -133,11 +136,11 @@ export function resolveItemPatchFields(
     endAt?: string | null;
     startTimeZone?: string;
     endTimeZone?: string;
-    startLocation?: ItineraryItem["startLocation"];
-    endLocation?: ItineraryItem["endLocation"];
+    startLocation?: ItineraryItem["startLocation"] | null;
+    endLocation?: ItineraryItem["endLocation"] | null;
     notes?: string;
     confirmationCode?: string;
-    enrichment?: ItineraryItem["enrichment"];
+    enrichment?: ItineraryItem["enrichment"] | null;
     details?: ItineraryItem["details"];
   } = {};
 
@@ -160,10 +163,14 @@ export function resolveItemPatchFields(
   if (patch.endTimeZone !== undefined) {
     out.endTimeZone = patch.endTimeZone;
   }
-  if (patch.startLocation !== undefined) {
+  if (patch.startLocation === null) {
+    out.startLocation = null;
+  } else if (patch.startLocation !== undefined) {
     out.startLocation = patch.startLocation;
   }
-  if (patch.endLocation !== undefined) {
+  if (patch.endLocation === null) {
+    out.endLocation = null;
+  } else if (patch.endLocation !== undefined) {
     out.endLocation = patch.endLocation;
   }
   if (patch.notes !== undefined) {
@@ -172,7 +179,9 @@ export function resolveItemPatchFields(
   if (patch.confirmationCode !== undefined) {
     out.confirmationCode = patch.confirmationCode;
   }
-  if (patch.enrichment !== undefined) {
+  if (patch.enrichment === null) {
+    out.enrichment = null;
+  } else if (patch.enrichment !== undefined) {
     out.enrichment = patch.enrichment;
   }
   if (patch.details !== undefined) {
@@ -240,11 +249,15 @@ export function buildItemPatchUpdateExpression(
     sets.push("endTimeZone = :endTimeZone");
     values[":endTimeZone"] = fields.endTimeZone;
   }
-  if (fields.startLocation !== undefined) {
+  if (fields.startLocation === null) {
+    removes.push("startLocation");
+  } else if (fields.startLocation !== undefined) {
     sets.push("startLocation = :startLocation");
     values[":startLocation"] = fields.startLocation;
   }
-  if (fields.endLocation !== undefined) {
+  if (fields.endLocation === null) {
+    removes.push("endLocation");
+  } else if (fields.endLocation !== undefined) {
     sets.push("endLocation = :endLocation");
     values[":endLocation"] = fields.endLocation;
   }
@@ -256,7 +269,9 @@ export function buildItemPatchUpdateExpression(
     sets.push("confirmationCode = :confirmationCode");
     values[":confirmationCode"] = fields.confirmationCode;
   }
-  if (fields.enrichment !== undefined) {
+  if (fields.enrichment === null) {
+    removes.push("enrichment");
+  } else if (fields.enrichment !== undefined) {
     sets.push("enrichment = :enrichment");
     values[":enrichment"] = fields.enrichment;
   }
@@ -285,7 +300,8 @@ export function buildItemPatchUpdateExpression(
  * `details` is full-replace when present (validated against stored type).
  * **Preserves `sortKey` from `existing`** — callers must pass the live row
  * (or re-apply live sortKey after write) so reorder races are not clobbered.
- * `startAt` / `endAt` JSON `null` clears the field.
+ * `startAt` / `endAt` / `startLocation` / `endLocation` / `enrichment`
+ * JSON `null` clears the field.
  */
 export function applyItemPatch(
   existing: ItineraryItem,
@@ -306,6 +322,18 @@ export function applyItemPatch(
       : fields.endAt !== undefined
         ? fields.endAt
         : existing.endAt;
+  const nextStartLocation =
+    fields.startLocation === null
+      ? undefined
+      : fields.startLocation !== undefined
+        ? fields.startLocation
+        : existing.startLocation;
+  const nextEndLocation =
+    fields.endLocation === null
+      ? undefined
+      : fields.endLocation !== undefined
+        ? fields.endLocation
+        : existing.endLocation;
 
   const nextBase = {
     itemId: existing.itemId,
@@ -326,23 +354,19 @@ export function applyItemPatch(
       fields.endTimeZone !== undefined
         ? fields.endTimeZone
         : existing.endTimeZone,
-    startLocation:
-      fields.startLocation !== undefined
-        ? fields.startLocation
-        : existing.startLocation,
-    endLocation:
-      fields.endLocation !== undefined
-        ? fields.endLocation
-        : existing.endLocation,
+    startLocation: nextStartLocation,
+    endLocation: nextEndLocation,
     notes: fields.notes !== undefined ? fields.notes : existing.notes,
     confirmationCode:
       fields.confirmationCode !== undefined
         ? fields.confirmationCode
         : existing.confirmationCode,
     enrichment:
-      fields.enrichment !== undefined
-        ? fields.enrichment
-        : existing.enrichment,
+      fields.enrichment === null
+        ? undefined
+        : fields.enrichment !== undefined
+          ? fields.enrichment
+          : existing.enrichment,
   };
 
   const details = fields.details ?? existing.details;

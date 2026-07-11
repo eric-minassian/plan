@@ -95,6 +95,18 @@ describe("UpdateItineraryItem", () => {
       expect(decoded.right.endAt).toBeNull();
     }
   });
+
+  it("accepts null startLocation/endLocation as clear sentinels", () => {
+    const decoded = S.decodeUnknownEither(UpdateItineraryItem)({
+      startLocation: null,
+      endLocation: null,
+    });
+    expect(Either.isRight(decoded)).toBe(true);
+    if (Either.isRight(decoded)) {
+      expect(decoded.right.startLocation).toBeNull();
+      expect(decoded.right.endLocation).toBeNull();
+    }
+  });
 });
 
 describe("decodeUpdateDetails", () => {

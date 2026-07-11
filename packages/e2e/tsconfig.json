@@ -2,10 +2,8 @@
   "extends": "@tripplan/tsconfig/node.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": ".",
-    "noEmit": true,
-    "lib": ["ES2022", "DOM"],
-    "types": ["node"]
+    "rootDir": "src",
+    "noEmit": true
   },
-  "include": ["src", "tests", "playwright.config.ts"]
+  "include": ["src"]
 }
