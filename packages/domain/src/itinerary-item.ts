@@ -252,12 +252,18 @@ export const CreateItineraryItem = S.Union(
 export type CreateItineraryItem = typeof CreateItineraryItem.Type;
 
 /**
+ * Instant string to set, or JSON `null` to clear the stored field.
+ * Omitted property ⇒ leave unchanged.
+ */
+const InstantPatch = S.NullOr(InstantInput);
+
+/**
  * Update field struct (no `type`). Used after rejecting payloads that include `type`.
  */
 const UpdateItineraryItemFields = S.Struct({
   title: S.optional(Title),
-  startAt: S.optional(InstantInput),
-  endAt: S.optional(InstantInput),
+  startAt: S.optional(InstantPatch),
+  endAt: S.optional(InstantPatch),
   startTimeZone: S.optional(S.String),
   endTimeZone: S.optional(S.String),
   startLocation: S.optional(GeoPoint),
@@ -277,6 +283,7 @@ const UpdateItineraryItemFields = S.Struct({
  * Sending `type` fails decode with message suitable for 400 ValidationError.
  * When `details` is present it must match the existing item type schema
  * (full replace of details, not deep-merge) — use {@link decodeUpdateDetails}.
+ * `startAt` / `endAt`: Instant string to set, `null` to clear, omit to leave.
  */
 export const UpdateItineraryItem = S.Unknown.pipe(
   S.filter(

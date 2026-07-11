@@ -83,6 +83,18 @@ describe("UpdateItineraryItem", () => {
       expect(String(decoded.left.message)).toContain("type is immutable");
     }
   });
+
+  it("accepts null startAt/endAt as clear sentinels", () => {
+    const decoded = S.decodeUnknownEither(UpdateItineraryItem)({
+      startAt: null,
+      endAt: null,
+    });
+    expect(Either.isRight(decoded)).toBe(true);
+    if (Either.isRight(decoded)) {
+      expect(decoded.right.startAt).toBeNull();
+      expect(decoded.right.endAt).toBeNull();
+    }
+  });
 });
 
 describe("decodeUpdateDetails", () => {

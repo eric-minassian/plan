@@ -1,13 +1,23 @@
 import { AuthError, type AuthClient } from "@ericminassian/auth/client";
-import type { CreateTrip, Trip } from "@tripplan/domain";
+import type {
+  CreateItineraryItem,
+  CreateTrip,
+  ItineraryItem,
+  Trip,
+  UpdateItineraryItem,
+} from "@tripplan/domain";
 import {
+  decodeItemResponse,
+  decodeTripDetailResponse,
   decodeTripListResponse,
   decodeTripResponse,
+  etagFromVersion,
+  type TripDetailResponse,
   type TripListResponse,
 } from "./decode.ts";
 import { ApiClientError, parseApiErrorBody } from "./errors.ts";
 
-export type { TripListResponse };
+export type { TripDetailResponse, TripListResponse };
 
 /**
  * Thin TripPlan HTTP client.
@@ -22,6 +32,19 @@ export interface TripPlanApi {
     readonly limit?: number;
   }): Promise<TripListResponse>;
   createTrip(input: CreateTrip): Promise<Trip>;
+  getTrip(tripId: string): Promise<TripDetailResponse>;
+  createItem(
+    tripId: string,
+    input: CreateItineraryItem,
+    options?: { readonly idempotencyKey?: string },
+  ): Promise<ItineraryItem>;
+  updateItem(
+    tripId: string,
+    itemId: string,
+    expectedVersion: number,
+    input: UpdateItineraryItem,
+  ): Promise<ItineraryItem>;
+  deleteItem(tripId: string, itemId: string): Promise<void>;
 }
 
 export interface TripPlanApiOptions {
@@ -65,6 +88,55 @@ export function createTripPlanApi(
           body: JSON.stringify(input),
         },
         decodeTripResponse,
+      );
+    },
+    getTrip(tripId) {
+      return request(
+        `/api/v1/trips/${encodeURIComponent(tripId)}`,
+        { method: "GET" },
+        decodeTripDetailResponse,
+      );
+    },
+    createItem(tripId, input, createOptions = {}) {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (
+        createOptions.idempotencyKey !== undefined &&
+        createOptions.idempotencyKey.length > 0
+      ) {
+        headers["Idempotency-Key"] = createOptions.idempotencyKey;
+      }
+      return request(
+        `/api/v1/trips/${encodeURIComponent(tripId)}/items`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(input),
+        },
+        decodeItemResponse,
+      );
+    },
+    updateItem(tripId, itemId, expectedVersion, input) {
+      return request(
+        `/api/v1/trips/${encodeURIComponent(tripId)}/items/${encodeURIComponent(itemId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "If-Match": etagFromVersion(expectedVersion),
+          },
+          body: JSON.stringify(input),
+        },
+        decodeItemResponse,
+      );
+    },
+    deleteItem(tripId, itemId) {
+      return requestEmpty(
+        auth,
+        `/api/v1/trips/${encodeURIComponent(tripId)}/items/${encodeURIComponent(itemId)}`,
+        { method: "DELETE" },
+        options,
       );
     },
   };
@@ -131,4 +203,49 @@ async function requestJson<T>(
   }
 
   return decode(json, response.status);
+}
+
+/** DELETE / 204 No Content (and similar) — no JSON body expected. */
+async function requestEmpty(
+  auth: AuthClient,
+  path: string,
+  init: RequestInit,
+  options: TripPlanApiOptions,
+): Promise<void> {
+  const url = apiUrl(path);
+
+  let response: Response;
+  try {
+    response = await auth.fetchWithAuth(url, init);
+  } catch (cause) {
+    if (cause instanceof AuthError && cause.code === "login_required") {
+      await options.onUnauthorized?.();
+      throw new ApiClientError(401, undefined, "Authentication required");
+    }
+    throw cause;
+  }
+
+  if (response.ok) {
+    return;
+  }
+
+  const text = await response.text();
+  let json: unknown;
+  if (text.length > 0) {
+    try {
+      json = JSON.parse(text) as unknown;
+    } catch {
+      throw new ApiClientError(
+        response.status,
+        undefined,
+        `Invalid JSON response (${String(response.status)})`,
+      );
+    }
+  }
+
+  const envelope = parseApiErrorBody(json);
+  if (response.status === 401 || envelope?.type === "Unauthorized") {
+    await options.onUnauthorized?.();
+  }
+  throw new ApiClientError(response.status, envelope);
 }

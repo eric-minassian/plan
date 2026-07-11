@@ -9,6 +9,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { Link } from "react-router-dom";
 import { createTripPlanApi } from "../api/client.ts";
 import { decodeCreateTrip } from "../api/decode.ts";
 import { formatApiError } from "../api/errors.ts";
@@ -38,7 +39,7 @@ function emptyForm(): CreateTripFormState {
   };
 }
 
-/** Owner trip list + create form (PR 8a scope — no timeline/items). */
+/** Owner trip list + create form; links into trip timeline (PR 8b). */
 export function TripListPage() {
   const authClient = useAuthClient();
   const { signOut } = useAuth();
@@ -187,13 +188,18 @@ export function TripListPage() {
           <ul className="trip-cards">
             {trips.map((trip) => (
               <li key={trip.tripId} className="trip-card">
-                <div className="trip-card__title">{trip.title}</div>
-                <div className="trip-card__meta">
-                  <span>
-                    {trip.startDate} → {trip.endDate}
-                  </span>
-                  <span className="trip-card__tz">{trip.timezone}</span>
-                </div>
+                <Link
+                  to={`/trips/${encodeURIComponent(trip.tripId)}`}
+                  className="trip-card__link"
+                >
+                  <div className="trip-card__title">{trip.title}</div>
+                  <div className="trip-card__meta">
+                    <span>
+                      {trip.startDate} → {trip.endDate}
+                    </span>
+                    <span className="trip-card__tz">{trip.timezone}</span>
+                  </div>
+                </Link>
               </li>
             ))}
           </ul>
