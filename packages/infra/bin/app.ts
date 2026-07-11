@@ -10,7 +10,8 @@ import { isProdStage, resolveStage } from "../src/stage.js";
  * TripPlan CDK app — Foundation + Data + Api + Observability (us-east-1).
  * Stage via context: `pnpm synth -c stage=dev` (default: dev).
  * Allowed stages: dev | staging | prod (unknown values fail synth).
- * Optional: `-c alertEmail=ops@example.com` for budget + SNS alarm mail.
+ * Prod requires: `-c alertEmail=ops@example.com` (SNS + budget notifications).
+ * Optional: `-c runbookBaseUrl=https://github.com/org/repo/blob/main/packages/infra/runbooks`
  * No Cognito — owner OIDC is external (auth.ericminassian.com).
  */
 const app = new cdk.App();
@@ -21,6 +22,18 @@ const alertEmailRaw = app.node.tryGetContext("alertEmail");
 const alertEmail =
   typeof alertEmailRaw === "string" && alertEmailRaw.trim().length > 0
     ? alertEmailRaw.trim()
+    : undefined;
+
+if (prod && alertEmail === undefined) {
+  throw new Error(
+    'Prod stage requires -c alertEmail=you@example.com so alarms and the monthly budget can notify a human. Example: pnpm exec cdk synth -c stage=prod -c alertEmail=ops@example.com',
+  );
+}
+
+const runbookBaseUrlRaw = app.node.tryGetContext("runbookBaseUrl");
+const runbookBaseUrl =
+  typeof runbookBaseUrlRaw === "string" && runbookBaseUrlRaw.trim().length > 0
+    ? runbookBaseUrlRaw.trim().replace(/\/$/, "")
     : undefined;
 
 const env: cdk.Environment = {
@@ -82,6 +95,7 @@ const observability = new ObservabilityStack(
     httpApi: api.httpApi,
     // deleteDlq: wire when trip-delete SQS lands (PR15)
     alertEmail,
+    runbookBaseUrl,
     description: `TripPlan observability (dashboard, alarms, budget, WAF) — ${stage}`,
     terminationProtection: prod,
     tags: {
