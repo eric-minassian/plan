@@ -1,12 +1,18 @@
 import {
   CreateItineraryItem,
+  CreateShareResponse,
   CreateTrip,
   ItineraryItem,
+  ShareListResponse,
+  ShareTripDTO,
   Trip,
   UpdateItineraryItem,
   type CreateItineraryItem as CreateItineraryItemInput,
+  type CreateShareResponse as CreateShareResponseType,
   type CreateTrip as CreateTripInput,
   type ItineraryItem as ItineraryItemType,
+  type ShareListResponse as ShareListResponseType,
+  type ShareTripDTO as ShareTripDTOType,
   type Trip as TripType,
   type UpdateItineraryItem as UpdateItineraryItemInput,
 } from "@tripplan/domain";
@@ -126,6 +132,51 @@ export function decodeItemResponse(
       status,
       undefined,
       `Invalid item response: ${schemaIssues(decoded.left)}`,
+    );
+  }
+  return decoded.right;
+}
+
+export function decodeCreateShareResponse(
+  json: unknown,
+  status: number,
+): CreateShareResponseType {
+  const decoded = S.decodeUnknownEither(CreateShareResponse)(json);
+  if (Either.isLeft(decoded)) {
+    throw new ApiClientError(
+      status,
+      undefined,
+      `Invalid create share response: ${schemaIssues(decoded.left)}`,
+    );
+  }
+  return decoded.right;
+}
+
+export function decodeShareListResponse(
+  json: unknown,
+  status: number,
+): ShareListResponseType {
+  const decoded = S.decodeUnknownEither(ShareListResponse)(json);
+  if (Either.isLeft(decoded)) {
+    throw new ApiClientError(
+      status,
+      undefined,
+      `Invalid share list response: ${schemaIssues(decoded.left)}`,
+    );
+  }
+  return decoded.right;
+}
+
+export function decodeShareTripResponse(
+  json: unknown,
+  status: number,
+): ShareTripDTOType {
+  const decoded = S.decodeUnknownEither(ShareTripDTO)(json);
+  if (Either.isLeft(decoded)) {
+    throw new ApiClientError(
+      status,
+      undefined,
+      `Invalid share trip response: ${schemaIssues(decoded.left)}`,
     );
   }
   return decoded.right;

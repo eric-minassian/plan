@@ -6,6 +6,7 @@ import type {
 } from "aws-lambda";
 import { makeEricminassianOwnerAuth } from "./auth/ericminassian-owner-auth.js";
 import type { OwnerAuthService } from "./auth/owner-auth.js";
+import { makeShareAuth, SHARE_COOKIE_NAME } from "./auth/share-auth.js";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { fromApiGatewayEvent, toApiGatewayResult } from "./http/apigw.js";
 import type { HttpRequest } from "./http/types.js";
@@ -15,7 +16,12 @@ import {
   handleRequestAsync,
   type RouterDeps,
 } from "./router.js";
+import { makeDynamoShareRepo } from "./repos/dynamo-share-repo.js";
 import { makeDynamoTripRepo } from "./repos/dynamo-trip-repo.js";
+import {
+  makeInMemoryShareRepo,
+  type ShareRepository,
+} from "./repos/share-repo.js";
 import {
   makeInMemoryTripRepo,
   type TripRepository,
@@ -30,6 +36,7 @@ export interface HandlerOptions {
   readonly ownerAuth?: OwnerAuthService;
   readonly userRepo?: UserRepository;
   readonly tripRepo?: TripRepository;
+  readonly shareRepo?: ShareRepository;
   readonly logger?: Logger;
 }
 
@@ -37,7 +44,7 @@ export interface HandlerOptions {
  * Create a Lambda handler for API Gateway HTTP API (payload v2).
  * Owner JWT is verified in-process (no Cognito / APIGW JWT authorizer).
  *
- * Persistence: when `TABLE_NAME` is set, trips use DynamoDB single-table;
+ * Persistence: when `TABLE_NAME` is set, trips + shares use DynamoDB single-table;
  * otherwise in-memory (unit tests / local skeleton). User profiles remain
  * in-memory until a Dynamo UserRepository lands.
  */
@@ -47,11 +54,18 @@ export function createHandler(
   const config = options.config ?? loadConfig();
   const logger = options.logger ?? consoleLogger;
   const userRepo = options.userRepo ?? makeInMemoryUserRepo();
+  const tableName = config.tableName;
+  const useDynamo = tableName !== undefined && tableName.length > 0;
   const tripRepo =
     options.tripRepo ??
-    (config.tableName !== undefined && config.tableName.length > 0
-      ? makeDynamoTripRepo(config.tableName)
+    (useDynamo && tableName !== undefined
+      ? makeDynamoTripRepo(tableName)
       : makeInMemoryTripRepo());
+  const shareRepo =
+    options.shareRepo ??
+    (useDynamo && tableName !== undefined
+      ? makeDynamoShareRepo(tableName)
+      : makeInMemoryShareRepo());
 
   const routeTable = buildRoutes(config);
 
@@ -81,10 +95,18 @@ export function createHandler(
     });
     currentRequest = request;
 
+    const shareAuth = makeShareAuth({
+      getCookie: () => request.cookies[SHARE_COOKIE_NAME],
+      shareRepo,
+      tripRepo,
+    });
+
     const deps: RouterDeps = {
       ownerAuth,
       userRepo,
       tripRepo,
+      shareRepo,
+      shareAuth,
       logger,
       routes: routeTable,
     };

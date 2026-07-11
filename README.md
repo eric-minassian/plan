@@ -34,7 +34,17 @@ Shared tooling lives under `tooling/` (`tsconfig`, `eslint-config`). Versioned a
 pnpm install
 pnpm typecheck   # typecheck all packages
 pnpm lint        # lint all packages
-pnpm test        # run package tests (when present)
+pnpm test        # unit tests (does not run Playwright)
+```
+
+### E2E (`@tripplan/e2e`)
+
+Playwright smoke (share link → session cookie → read-only trip) against a deployed host. Skips without secrets. See [`packages/e2e/README.md`](packages/e2e/README.md).
+
+```bash
+pnpm --filter @tripplan/e2e playwright:install
+export E2E_SHARE_TOKEN='…'   # or E2E_OWNER_ACCESS_TOKEN; E2E_BASE_URL optional (defaults to staging)
+pnpm --filter @tripplan/e2e test:share
 ```
 
 ## Development
