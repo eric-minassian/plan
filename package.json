@@ -1,0 +1,21 @@
+{
+  "name": "tripplan",
+  "private": true,
+  "version": "0.0.0",
+  "description": "TripPlan — modern trip planning platform monorepo",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "pnpm -r --if-present run lint",
+    "test": "pnpm -r --if-present run test"
+  },
+  "devDependencies": {
+    "@tripplan/eslint-config": "workspace:*",
+    "@tripplan/tsconfig": "workspace:*",
+    "typescript": "~5.7.3"
+  }
+}
