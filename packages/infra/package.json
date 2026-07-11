@@ -4,14 +4,28 @@
   "private": true,
   "description": "AWS CDK infrastructure for TripPlan",
   "type": "module",
+  "bin": {
+    "tripplan-infra": "bin/app.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy --all",
+    "destroy": "cdk destroy --all"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.178.2",
+    "constructs": "^10.4.2"
   },
   "devDependencies": {
     "@tripplan/eslint-config": "workspace:*",
     "@tripplan/tsconfig": "workspace:*",
+    "@types/node": "^22.10.5",
+    "aws-cdk": "^2.178.2",
     "eslint": "^9.17.0",
+    "tsx": "^4.19.2",
     "typescript": "~5.7.3"
   }
 }
