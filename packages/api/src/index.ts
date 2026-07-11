@@ -66,6 +66,39 @@ export {
   type ShareRepository,
 } from "./repos/share-repo.js";
 export { makeDynamoShareRepo } from "./repos/dynamo-share-repo.js";
+export {
+  AttachmentRepo,
+  makeInMemoryAttachmentRepo,
+  MAX_ATTACHMENTS_PER_ITEM,
+  MAX_PENDING_ATTACHMENTS_PER_ITEM,
+  type AttachmentRepository,
+} from "./repos/attachment-repo.js";
+export { makeDynamoAttachmentRepo } from "./repos/dynamo-attachment-repo.js";
+export {
+  DocsStore,
+  createDocsS3Client,
+  makeMockDocsStore,
+  makeS3DocsStore,
+  PENDING_OBJECT_TAG,
+  PRESIGN_PUT_SIGNED_HEADER_NAMES,
+  type DocsStoreService,
+  type MockDocsStore,
+} from "./s3/docs-store.js";
+export {
+  TripDeleteQueue,
+  makeInMemoryTripDeleteQueue,
+  makeSqsTripDeleteQueue,
+  parseTripDeleteMessage,
+  serializeTripDeleteMessage,
+  type TripDeleteMessage,
+  type TripDeleteQueueService,
+  type InMemoryTripDeleteQueue,
+} from "./sqs/trip-delete-queue.js";
+export {
+  createTripDeleteWorkerHandler,
+  runTripDeleteCascade,
+  handler as tripDeleteWorkerHandler,
+} from "./workers/trip-delete-worker.js";
 export type {
   AuthClass,
   HttpRequest,

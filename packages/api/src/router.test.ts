@@ -36,12 +36,18 @@ function emptyRepos() {
 describe("authz matrix", () => {
   it("exposes health as public and me/trips as owner", () => {
     const health = routes.find((r) => r.path === "/api/v1/health");
-    const me = routes.find((r) => r.path === "/api/v1/me");
+    const meGet = routes.find(
+      (r) => r.method === "GET" && r.path === "/api/v1/me",
+    );
+    const meDelete = routes.find(
+      (r) => r.method === "DELETE" && r.path === "/api/v1/me",
+    );
     const listTrips = routes.find(
       (r) => r.method === "GET" && r.path === "/api/v1/trips",
     );
     expect(health?.authClass).toBe("public");
-    expect(me?.authClass).toBe("owner");
+    expect(meGet?.authClass).toBe("owner");
+    expect(meDelete?.authClass).toBe("owner");
     expect(listTrips?.authClass).toBe("owner");
   });
 
@@ -111,6 +117,25 @@ describe("authz matrix", () => {
     );
     const body2 = JSON.parse(again.body ?? "{}") as { createdAt: string };
     expect(body2.createdAt).toBe(body.createdAt);
+  });
+
+  it("DELETE /api/v1/me returns 202 not_implemented stub (data not purged)", async () => {
+    const principal = mockPrincipal({ sub: "purge-user" });
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "DELETE", path: "/api/v1/me" }), {
+        ownerAuth: makeMockOwnerAuth(principal),
+        ...emptyRepos(),
+      }),
+    );
+    expect(response.status).toBe(202);
+    const body = JSON.parse(response.body ?? "{}") as {
+      status: string;
+      userId: string;
+      message: string;
+    };
+    expect(body.status).toBe("not_implemented");
+    expect(body.userId).toBe("purge-user");
+    expect(body.message).toMatch(/not fully implemented/i);
   });
 
   it("GET /api/v1/me uses sub as displayName when nickname absent", async () => {
@@ -189,7 +214,7 @@ describe("authz matrix", () => {
       }),
     );
     expect(response.status).toBe(405);
-    expect(response.headers?.allow).toBe("GET");
+    expect(response.headers?.allow).toBe("GET, DELETE");
     const body = JSON.parse(response.body ?? "{}") as {
       type: string;
       retryable: boolean;

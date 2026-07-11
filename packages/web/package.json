@@ -16,23 +16,19 @@
     "@ericminassian/auth": "^1.1.0",
     "@tripplan/domain": "workspace:*",
     "effect": "^3.21.4",
-    "maplibre-gl": "^5.24.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7",
-    "workbox-window": "^7.4.1"
+    "react-router-dom": "^7"
   },
   "devDependencies": {
     "@tripplan/eslint-config": "workspace:*",
     "@tripplan/tsconfig": "workspace:*",
-    "@types/geojson": "^7946.0.16",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^9.17.0",
     "typescript": "~5.7.3",
     "vite": "^6.0.7",
-    "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.10"
   }
 }

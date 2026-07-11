@@ -58,6 +58,7 @@ const api = new ApiStack(app, `TripPlan-Api-${stage}`, {
   env,
   stage,
   table: data.table,
+  documentsBucket: data.documentsBucket,
   logRetention: foundation.defaultLogRetention,
   description: `TripPlan API (Lambda + HTTP API, in-Lambda OIDC) — ${stage}`,
   terminationProtection: prod,

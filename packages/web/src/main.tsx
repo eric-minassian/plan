@@ -2,7 +2,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { loadConfig } from "./config.ts";
-import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
 
 async function bootstrap(): Promise<void> {
@@ -20,7 +19,6 @@ async function bootstrap(): Promise<void> {
         <App config={config} />
       </StrictMode>,
     );
-    registerServiceWorker();
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to start TripPlan";
