@@ -1,3 +1,13 @@
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@eric-minassian/design/components/field";
+import { Input } from "@eric-minassian/design/components/input";
+import { Spinner } from "@eric-minassian/design/components/spinner";
+import { Textarea } from "@eric-minassian/design/components/textarea";
 import type {
   CreateItineraryItem,
   ItineraryItem,
@@ -10,6 +20,7 @@ import {
   instantToWallClockLocal,
   wallClockInZoneToInstant,
 } from "../timeline/datetime.ts";
+import { ErrorAlert } from "./ErrorAlert.tsx";
 
 export type NoteFormMode =
   | { readonly kind: "create" }
@@ -136,81 +147,89 @@ export function NoteForm(props: NoteFormProps) {
   const displayError = localError ?? error;
 
   return (
-    <form className="form item-form" onSubmit={(e) => void onSubmit(e)}>
-      <h3 className="item-form__title">
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => void onSubmit(e)}
+    >
+      <h3 className="font-heading text-sm font-medium">
         {mode.kind === "create" ? "Add note" : "Edit note"}
       </h3>
       {displayError !== undefined ? (
-        <p className="banner banner--error" role="alert">
-          {displayError}
-        </p>
+        <ErrorAlert>{displayError}</ErrorAlert>
       ) : null}
 
-      <label className="field">
-        <span className="field__label">Title</span>
-        <input
-          className="field__input"
-          type="text"
-          name="title"
-          maxLength={200}
-          required
-          value={form.title}
-          onChange={(e) => {
-            setForm((f) => ({ ...f, title: e.target.value }));
-          }}
-          placeholder="Packing list"
-        />
-      </label>
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="note-title">Title</FieldLabel>
+          <Input
+            id="note-title"
+            type="text"
+            name="title"
+            maxLength={200}
+            required
+            value={form.title}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, title: e.target.value }));
+            }}
+            placeholder="Packing list"
+          />
+        </Field>
 
-      <label className="field">
-        <span className="field__label">Body</span>
-        <textarea
-          className="field__input field__textarea"
-          name="notes"
-          maxLength={5000}
-          rows={4}
-          value={form.notes}
-          onChange={(e) => {
-            setForm((f) => ({ ...f, notes: e.target.value }));
-          }}
-          placeholder="Free-form note…"
-        />
-      </label>
+        <Field>
+          <FieldLabel htmlFor="note-body">Body</FieldLabel>
+          <Textarea
+            id="note-body"
+            name="notes"
+            maxLength={5000}
+            rows={4}
+            value={form.notes}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, notes: e.target.value }));
+            }}
+            placeholder="Free-form note…"
+          />
+        </Field>
 
-      <label className="field">
-        <span className="field__label">
-          Start ({tripTimezone}) — optional
-        </span>
-        <input
-          className="field__input"
-          type="datetime-local"
-          name="startAt"
-          value={form.startAtLocal}
-          onChange={(e) => {
-            setForm((f) => ({ ...f, startAtLocal: e.target.value }));
-          }}
-        />
-        <span className="field__hint">
-          Clear to keep unscheduled. Times are in {tripTimezone}.
-        </span>
-      </label>
+        <Field>
+          <FieldLabel htmlFor="note-start">
+            Start ({tripTimezone}) — optional
+          </FieldLabel>
+          <Input
+            id="note-start"
+            type="datetime-local"
+            name="startAt"
+            value={form.startAtLocal}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, startAtLocal: e.target.value }));
+            }}
+          />
+          <FieldDescription>
+            Clear to keep unscheduled. Times are in {tripTimezone}.
+          </FieldDescription>
+        </Field>
+      </FieldGroup>
 
-      <div className="form__actions">
-        <button type="submit" className="btn btn--primary" disabled={submitting}>
-          {submitting
-            ? "Saving…"
-            : mode.kind === "create"
-              ? "Add note"
-              : "Save note"}
-        </button>
-        <button
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={submitting}>
+          {submitting ? (
+            <>
+              <Spinner data-icon="inline-start" />
+              Saving…
+            </>
+          ) : mode.kind === "create" ? (
+            "Add note"
+          ) : (
+            "Save note"
+          )}
+        </Button>
+        <Button
           type="button"
-          className="btn btn--ghost"
+          variant="ghost"
           disabled={submitting}
           onClick={onCancel}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );

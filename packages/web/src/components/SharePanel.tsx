@@ -1,10 +1,35 @@
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@eric-minassian/design/components/card";
+import {
+  Field,
+  FieldLabel,
+} from "@eric-minassian/design/components/field";
+import { Input } from "@eric-minassian/design/components/input";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@eric-minassian/design/components/item";
+import { Spinner } from "@eric-minassian/design/components/spinner";
 import type {
   CreateShareResponse,
   ShareGrantPublic,
 } from "@tripplan/domain";
+import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { TripPlanApi } from "../api/client.ts";
 import { formatApiError } from "../api/errors.ts";
+import { ErrorAlert } from "./ErrorAlert.tsx";
 
 export interface SharePanelProps {
   readonly tripId: string;
@@ -88,7 +113,9 @@ export function SharePanel(props: SharePanelProps) {
       await navigator.clipboard.writeText(url);
       setCopied(true);
     } catch {
-      setError("Could not copy to clipboard — select the link and copy manually.");
+      setError(
+        "Could not copy to clipboard — select the link and copy manually.",
+      );
     }
   }
 
@@ -117,122 +144,137 @@ export function SharePanel(props: SharePanelProps) {
   const active = shares.filter((s) => !s.revoked);
 
   return (
-    <section className="panel share-panel">
-      <div className="panel__header">
-        <h2>Share</h2>
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={() => {
-            void loadShares();
-          }}
-          disabled={loading}
-        >
-          Refresh
-        </button>
-      </div>
-
-      <p className="muted share-panel__hint">
-        Anyone with the link can view the{" "}
-        <strong>full itinerary</strong> (titles, times, notes, confirmation
-        codes, locations) until the link expires or you revoke it. No account
-        required.{" "}
-        <strong>
-          Opening another shared trip in this browser switches the active share
-          view
-        </strong>{" "}
-        (one share session cookie at a time).
-      </p>
-
-      {error !== undefined ? (
-        <p className="banner banner--error" role="alert">
-          {error}
-        </p>
-      ) : null}
-
-      <div className="share-panel__create">
-        <label className="field">
-          <span className="field__label">Label (optional)</span>
-          <input
-            className="field__input"
-            type="text"
-            maxLength={80}
-            value={label}
-            placeholder="Family, Friends…"
-            onChange={(e) => {
-              setLabel(e.target.value);
-            }}
-            disabled={creating}
-          />
-        </label>
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={creating}
-          onClick={() => {
-            void handleCreate();
-          }}
-        >
-          {creating ? "Creating…" : "Create share link"}
-        </button>
-      </div>
-
-      {lastCreated !== undefined ? (
-        <div className="share-panel__created">
-          <p className="share-panel__created-title">
-            Link ready
-            {lastCreated.label.length > 0
-              ? ` — ${lastCreated.label}`
-              : ""}
-            . Copy it now; the secret is not shown again.
-          </p>
-          <code className="share-panel__url">{lastCreated.url}</code>
-          <button
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle>Share</CardTitle>
+        <CardDescription>
+          Anyone with the link can view the full itinerary until it expires or
+          you revoke it. Opening another shared trip in this browser switches
+          the active share view.
+        </CardDescription>
+        <CardAction>
+          <Button
             type="button"
-            className="btn btn--primary btn--sm"
+            variant="ghost"
+            size="sm"
             onClick={() => {
-              void handleCopy(lastCreated.url);
+              void loadShares();
+            }}
+            disabled={loading}
+          >
+            <RefreshCwIcon
+              data-icon="inline-start"
+              className={loading ? "animate-spin" : undefined}
+            />
+            Refresh
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {error !== undefined ? <ErrorAlert>{error}</ErrorAlert> : null}
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <Field className="flex-1">
+            <FieldLabel htmlFor="share-label">Label (optional)</FieldLabel>
+            <Input
+              id="share-label"
+              type="text"
+              maxLength={80}
+              value={label}
+              placeholder="Family, Friends…"
+              onChange={(e) => {
+                setLabel(e.target.value);
+              }}
+              disabled={creating}
+            />
+          </Field>
+          <Button
+            type="button"
+            disabled={creating}
+            onClick={() => {
+              void handleCreate();
             }}
           >
-            {copied ? "Copied" : "Copy link"}
-          </button>
+            {creating ? (
+              <>
+                <Spinner data-icon="inline-start" />
+                Creating…
+              </>
+            ) : (
+              "Create share link"
+            )}
+          </Button>
         </div>
-      ) : null}
 
-      {loading && shares.length === 0 ? (
-        <p className="muted">Loading shares…</p>
-      ) : null}
-
-      {active.length === 0 && !loading ? (
-        <p className="muted">No active share links.</p>
-      ) : null}
-
-      {active.length > 0 ? (
-        <ul className="share-list">
-          {active.map((share) => (
-            <li key={share.shareId} className="share-list__item">
-              <div>
-                <div className="share-list__label">
-                  {share.label.length > 0 ? share.label : "Untitled link"}
-                </div>
-                <div className="muted share-list__meta">
-                  Expires {formatExpiry(share.expiresAt)}
-                </div>
-              </div>
-              <button
+        {lastCreated !== undefined ? (
+          <div className="flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+            <p className="text-sm font-medium">
+              Link ready
+              {lastCreated.label.length > 0
+                ? ` — ${lastCreated.label}`
+                : ""}
+              . Copy it now; the secret is not shown again.
+            </p>
+            <code className="block break-all rounded-md border bg-background px-2 py-1.5 font-mono text-xs">
+              {lastCreated.url}
+            </code>
+            <div>
+              <Button
                 type="button"
-                className="btn btn--ghost btn--sm"
-                disabled={revokingId === share.shareId}
+                size="sm"
                 onClick={() => {
-                  void handleRevoke(share);
+                  void handleCopy(lastCreated.url);
                 }}
               >
-                {revokingId === share.shareId ? "…" : "Revoke"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </section>
+                {copied ? "Copied" : "Copy link"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {loading && shares.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner />
+            Loading shares…
+          </div>
+        ) : null}
+
+        {active.length === 0 && !loading ? (
+          <p className="text-sm text-muted-foreground">
+            No active share links.
+          </p>
+        ) : null}
+
+        {active.length > 0 ? (
+          <ItemGroup className="gap-2">
+            {active.map((share) => (
+              <Item key={share.shareId} variant="outline" size="sm">
+                <ItemContent>
+                  <ItemTitle>
+                    {share.label.length > 0 ? share.label : "Untitled link"}
+                  </ItemTitle>
+                  <ItemDescription>
+                    Expires {formatExpiry(share.expiresAt)}
+                  </ItemDescription>
+                </ItemContent>
+                <ItemActions>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={revokingId === share.shareId}
+                    onClick={() => {
+                      void handleRevoke(share);
+                    }}
+                  >
+                    {revokingId === share.shareId ? "…" : "Revoke"}
+                  </Button>
+                </ItemActions>
+              </Item>
+            ))}
+          </ItemGroup>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

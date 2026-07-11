@@ -1,3 +1,11 @@
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@eric-minassian/design/components/card";
 import { useAuth } from "@ericminassian/auth/react";
 
 /** Unauthenticated landing — CTA to start PKCE login at auth.ericminassian.com. */
@@ -5,20 +13,23 @@ export function LoginPage() {
   const { signIn } = useAuth();
 
   return (
-    <div className="panel login">
-      <h2 className="login__title">Welcome to TripPlan</h2>
-      <p className="muted">
-        Sign in with your passkey to list and create trips.
-      </p>
-      <button
-        type="button"
-        className="btn btn--primary"
-        onClick={() => {
-          void signIn({ returnTo: "/" });
-        }}
-      >
-        Sign in
-      </button>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Welcome to TripPlan</CardTitle>
+        <CardDescription>
+          Sign in with your passkey to list and create trips.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button
+          type="button"
+          onClick={() => {
+            void signIn({ returnTo: "/" });
+          }}
+        >
+          Sign in
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
