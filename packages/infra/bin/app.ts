@@ -3,18 +3,26 @@ import * as cdk from "aws-cdk-lib";
 import { ApiStack } from "../src/stacks/api-stack.js";
 import { DataStack } from "../src/stacks/data-stack.js";
 import { FoundationStack } from "../src/stacks/foundation-stack.js";
+import { ObservabilityStack } from "../src/stacks/observability-stack.js";
 import { isProdStage, resolveStage } from "../src/stage.js";
 
 /**
- * TripPlan CDK app — Foundation + Data + Api stacks (us-east-1).
+ * TripPlan CDK app — Foundation + Data + Api + Observability (us-east-1).
  * Stage via context: `pnpm synth -c stage=dev` (default: dev).
  * Allowed stages: dev | staging | prod (unknown values fail synth).
+ * Optional: `-c alertEmail=ops@example.com` for budget + SNS alarm mail.
  * No Cognito — owner OIDC is external (auth.ericminassian.com).
  */
 const app = new cdk.App();
 
 const stage = resolveStage(app.node.tryGetContext("stage"));
 const prod = isProdStage(stage);
+const alertEmailRaw = app.node.tryGetContext("alertEmail");
+const alertEmail =
+  typeof alertEmailRaw === "string" && alertEmailRaw.trim().length > 0
+    ? alertEmailRaw.trim()
+    : undefined;
+
 const env: cdk.Environment = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: "us-east-1",
@@ -63,5 +71,27 @@ const api = new ApiStack(app, `TripPlan-Api-${stage}`, {
 
 api.addDependency(data);
 api.addDependency(foundation);
+
+const observability = new ObservabilityStack(
+  app,
+  `TripPlan-Observability-${stage}`,
+  {
+    env,
+    stage,
+    apiFunction: api.apiFunction,
+    httpApi: api.httpApi,
+    // deleteDlq: wire when trip-delete SQS lands (PR15)
+    alertEmail,
+    description: `TripPlan observability (dashboard, alarms, budget, WAF) — ${stage}`,
+    terminationProtection: prod,
+    tags: {
+      Project: "TripPlan",
+      Stage: stage,
+      Stack: "Observability",
+    },
+  },
+);
+
+observability.addDependency(api);
 
 app.synth();
