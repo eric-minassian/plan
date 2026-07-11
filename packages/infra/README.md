@@ -2,14 +2,16 @@
 
 AWS CDK (v2) infrastructure for TripPlan. **All stacks deploy to `us-east-1`.**
 
-## Stacks (this PR)
+## Stacks
 
 | Stack | ID pattern | Contents |
 |-------|------------|----------|
 | **FoundationStack** | `TripPlan-Foundation-{stage}` | CloudWatch log retention defaults; Secrets Manager placeholders (AeroDataBox, MapTiler server key) |
-| **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle) |
+| **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle); **PITR on prod** |
 | **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; routes `GET /api/v1/health` (public), `GET /api/v1/me` (owner JWT in-Lambda); env `TABLE_NAME` / `AUTH_ISSUER` / `AUTH_AUDIENCE` / `STAGE` / `PUBLIC_API_BASE_URL` (prod/staging). **Profile store is still in-memory** until Dynamo `UserRepository` lands — table R/W grant is preparatory. CORS: prod/staging SPA host only; localhost only on dev. |
-**Not in this package yet:** WebStack, ObservabilityStack.  
+| **ObservabilityStack** | `TripPlan-Observability-{stage}` | CloudWatch dashboard + alarms (API 5xx rate, Lambda p95 latency, enrichment $ custom metric); AWS Budgets monthly cost; SNS alarm topic; WAFv2 REGIONAL WebACL (rate-based) associated to HTTP API `$default`; runbook links on the dashboard |
+
+**Not in this package yet:** WebStack (CloudFront SPA).  
 **Never planned:** Cognito / AuthStack — owner auth is external OIDC ([eric-minassian/auth](https://github.com/eric-minassian/auth)).
 
 ## Requirements
@@ -37,6 +39,9 @@ pnpm synth
 pnpm exec cdk synth -c stage=dev
 pnpm exec cdk synth -c stage=prod
 
+# Optional: email for AWS Budgets notifications + SNS alarm subscription
+pnpm exec cdk synth -c stage=prod -c alertEmail=ops@example.com
+
 # Deploy / destroy (all stacks in this app)
 pnpm exec cdk deploy --all -c stage=dev
 pnpm exec cdk destroy --all -c stage=dev
@@ -51,6 +56,70 @@ pnpm exec cdk destroy --all -c stage=dev
 
 Context: `-c stage=…` (defaults to `dev` in `cdk.json`). Only `dev`, `staging`, and `prod` are accepted.
 
+## Observability
+
+### Dashboard
+
+CloudWatch dashboard name: **`TripPlan-{stage}`**.
+
+Widgets:
+
+- API Lambda duration (p50/p95/max), invocations/errors/throttles
+- HTTP API Count / 5xx and Latency p95 (by `ApiId`)
+- Enrichment estimated cost (custom metric; annotation at daily budget)
+- Delete DLQ depth (real metric when queue is passed in; **placeholder** until delete worker PR)
+- Alarm status + markdown links to runbooks
+
+### Alarms (SNS topic `tripplan-alarms-{stage}`)
+
+| Alarm | Condition |
+|-------|-----------|
+| `tripplan-{stage}-api-5xx-rate` | HTTP API 5xx / Count > **1%** for 10m |
+| `tripplan-{stage}-api-p95-latency` | Lambda Duration **p95 > 1500ms** for 10m |
+| `tripplan-{stage}-enrichment-budget` | `TripPlan/EnrichmentEstimatedCostUsd` sum > **$25/day prod**, **$5/day** else |
+| `tripplan-{stage}-delete-dlq-depth` | DLQ visible messages > 0 (**only if** `deleteDlq` wired) |
+
+Subscribe an email: `-c alertEmail=…` (confirms via SNS).
+
+### AWS Budgets
+
+Monthly cost budget `tripplan-{stage}-monthly-cost`:
+
+| Stage | Limit (USD) |
+|-------|-------------|
+| dev | 25 |
+| staging | 40 |
+| prod | 100 |
+
+With `alertEmail`: notify at 80% actual and 100% forecasted.  
+**Note:** third-party enrich spend (AeroDataBox, MapTiler) is **outside** AWS Budgets — see [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md).
+
+### WAF
+
+REGIONAL WebACL `tripplan-{stage}-api`:
+
+- Default allow
+- Rate-based rule: **2000 requests / 5 minutes / IP** → block
+- Associated to HTTP API stage `$default`
+- Export: `WebAclArn` for optional CloudFront attach later (CF needs a separate CLOUDFRONT-scoped ACL)
+
+### Runbooks
+
+| Runbook | Path |
+|---------|------|
+| Share abuse | [runbooks/share-abuse.md](./runbooks/share-abuse.md) |
+| Enrichment budget | [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md) |
+| Delete DLQ (+ PITR verify) | [runbooks/delete-dlq.md](./runbooks/delete-dlq.md) |
+
+### Custom metrics (app)
+
+Namespace **`TripPlan`** (constant `TRIPPLAN_METRIC_NAMESPACE`):
+
+| Metric | Dimensions | When |
+|--------|------------|------|
+| `EnrichmentEstimatedCostUsd` | `Stage` | Emit via EMF on enrich attempts (sum = estimated USD) |
+| `DeleteDlqDepthPlaceholder` | `Stage` | Dashboard only until real SQS DLQ exists |
+
 ## Outputs
 
 | Output | Description |
@@ -61,6 +130,10 @@ Context: `-c stage=…` (defaults to `dev` in `cdk.json`). Only `dev`, `staging`
 | `DefaultLogRetentionDays` | Stage default log retention (exported) |
 | `HttpApiUrl` | HTTP API base URL |
 | `ApiFunctionName` | API Lambda function name |
+| `DashboardName` | CloudWatch dashboard name |
+| `AlarmTopicArn` | SNS topic for alarms |
+| `WebAclArn` | WAFv2 WebACL ARN |
+| `MonthlyBudgetUsd` | Monthly AWS Budgets limit |
 
 ### Secrets (placeholders)
 
@@ -87,6 +160,19 @@ aws secretsmanager put-secret-value \
 - **GSI2** — Share token: `GSI2PK`/`GSI2SK`, INCLUDE `shareId`, `revoked`, `expiresAt`, `tripId`, `ownerId`
 - **GSI3** — Sessions by trip: `GSI3PK`/`GSI3SK`, KEYS_ONLY
 - **GSI4** — Sessions by share: `GSI4PK`/`GSI4SK`, KEYS_ONLY
+
+### PITR (prod)
+
+Point-in-time recovery is **on for prod only**. Verify:
+
+```bash
+aws dynamodb describe-continuous-backups \
+  --region us-east-1 \
+  --table-name TripPlan-prod \
+  --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription'
+```
+
+See [runbooks/delete-dlq.md](./runbooks/delete-dlq.md) for restore notes.
 
 ## S3 documents bucket
 
