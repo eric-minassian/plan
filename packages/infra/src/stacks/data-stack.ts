@@ -2,34 +2,16 @@ import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import type { Construct } from "constructs";
+import { docsCorsOrigins } from "../hosts.js";
 import { isProdStage, type Stage } from "../stage.js";
 
 export interface DataStackProps extends cdk.StackProps {
   readonly stage: Stage;
 }
 
-/**
- * Browser origins allowed to PUT/GET documents via presigned URLs.
- * Stage-driven so a dedicated staging host can be added without touching prod.
- *
- * Attachment object keys (design): `trips/{tripId}/items/{itemId}/{attachmentId}`
- * — not under a `pending/` prefix. Pending state is DDB `status: pending` + object tag.
- */
-function docsCorsOrigins(stage: Stage): string[] {
-  const productionSpa = "https://plan.ericminassian.com";
-  const stagingSpa = "https://plan-staging.ericminassian.com";
-  const localVite = "http://localhost:5173";
-
-  switch (stage) {
-    case "prod":
-      // Design requires prod SPA + local Vite for dogfood/dev against real bucket.
-      return [productionSpa, localVite];
-    case "staging":
-      return [stagingSpa, productionSpa, localVite];
-    case "dev":
-      return [productionSpa, localVite];
-  }
-}
+// Docs CORS origins: shared `docsCorsOrigins` in hosts.ts (plan + staging + Vite).
+// Attachment keys (design): `trips/{tripId}/items/{itemId}/{attachmentId}`
+// — not under a `pending/` prefix. Pending state is DDB `status: pending` + object tag.
 
 /**
  * Data plane: single-table DynamoDB (GSI1–4 + TTL) and encrypted S3 docs bucket.

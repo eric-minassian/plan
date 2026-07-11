@@ -2,7 +2,7 @@
   "name": "@tripplan/web",
   "version": "0.0.0",
   "private": true,
-  "description": "TripPlan SPA (React + Vite + Tailwind)",
+  "description": "TripPlan SPA (React + Vite shell; Tailwind planned)",
   "type": "module",
   "scripts": {
     "dev": "vite",

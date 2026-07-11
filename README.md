@@ -5,7 +5,7 @@ Modern trip planning platform monorepo.
 ## Stack
 
 - **TypeScript** end-to-end (strict)
-- **Web**: React + Vite + Tailwind + shadcn/ui
+- **Web**: React + Vite SPA shell (Tailwind + shadcn/ui planned)
 - **API**: Effect-based HTTP on AWS Lambda + API Gateway
 - **Infra**: AWS CDK (us-east-1)
 - **E2E**: Playwright
