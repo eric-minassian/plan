@@ -372,6 +372,38 @@ a:hover {
   font-weight: 600;
 }
 
+.item-form__lookup {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.85rem 0.9rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.item-form__lookup-legend {
+  padding: 0 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.field--actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.banner--info {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--fg);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
 .day-bucket {
   display: grid;
   gap: 0.65rem;

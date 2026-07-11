@@ -73,6 +73,41 @@ export function parseApiErrorBody(body: unknown): ApiErrorBody | undefined {
   return result;
 }
 
+function formatCandidate(raw: unknown): string | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const dep =
+    typeof record["departureAirport"] === "string"
+      ? record["departureAirport"]
+      : undefined;
+  const arr =
+    typeof record["arrivalAirport"] === "string"
+      ? record["arrivalAirport"]
+      : undefined;
+  const fn =
+    typeof record["flightNumber"] === "string"
+      ? record["flightNumber"]
+      : undefined;
+  const airline =
+    typeof record["airlineCode"] === "string"
+      ? record["airlineCode"]
+      : undefined;
+  const route =
+    dep !== undefined || arr !== undefined
+      ? `${dep ?? "?" }→${arr ?? "?"}`
+      : undefined;
+  const designator =
+    airline !== undefined && fn !== undefined
+      ? `${airline}${fn}`
+      : fn;
+  const bits = [designator, route].filter(
+    (x): x is string => x !== undefined && x.length > 0,
+  );
+  return bits.length > 0 ? bits.join(" ") : undefined;
+}
+
 function formatDetails(details: unknown): string | undefined {
   if (details === undefined || details === null) {
     return undefined;
@@ -85,6 +120,15 @@ function formatDetails(details: unknown): string | undefined {
     const issues = record["issues"];
     if (typeof issues === "string" && issues.trim().length > 0) {
       return issues;
+    }
+    const candidates = record["candidates"];
+    if (Array.isArray(candidates) && candidates.length > 0) {
+      const labels = candidates
+        .map(formatCandidate)
+        .filter((x): x is string => x !== undefined);
+      if (labels.length > 0) {
+        return `candidates: ${labels.join("; ")}`;
+      }
     }
   }
   return undefined;

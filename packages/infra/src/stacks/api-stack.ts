@@ -1,18 +1,15 @@
 import * as cdk from "aws-cdk-lib";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
-import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import type * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import {
   NodejsFunction,
   OutputFormat,
 } from "aws-cdk-lib/aws-lambda-nodejs";
-import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import type * as s3 from "aws-cdk-lib/aws-s3";
-import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,22 +30,17 @@ export interface ApiStackProps extends cdk.StackProps {
 }
 
 /**
- * API plane: Lambda (Node ARM64) + HTTP API + trip-delete SQS worker.
+ * API plane: Lambda (Node ARM64) + HTTP API.
  * JWT is verified in-Lambda via `@ericminassian/auth` — no Cognito, no
  * API Gateway JWT authorizer on owner routes.
  *
  * Persistence: `TABLE_NAME` + Dynamo R/W grants enable trip/item/share/ATT rows.
  * `DOCS_BUCKET_NAME` + S3 R/W for presigned attachments (HeadObject, tags, delete).
- * `TRIP_DELETE_QUEUE_URL` + SQS send for async trip cascade delete.
  * User profile upsert remains in-memory until a Dynamo UserRepository lands.
  */
 export class ApiStack extends cdk.Stack {
   readonly httpApi: apigwv2.HttpApi;
   readonly apiFunction: lambda.Function;
-  readonly tripDeleteWorker: lambda.Function;
-  readonly tripDeleteQueue: sqs.Queue;
-  /** DLQ for ObservabilityStack (`deleteDlq` prop). */
-  readonly deleteDlq: sqs.Queue;
   readonly httpApiUrl: string;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
@@ -71,70 +63,8 @@ export class ApiStack extends cdk.Stack {
       "src",
       "handler.ts",
     );
-    const tripDeleteWorkerEntry = path.join(
-      __dirname,
-      "..",
-      "..",
-      "..",
-      "api",
-      "src",
-      "workers",
-      "trip-delete-worker.ts",
-    );
 
     const publicApiBaseUrl = publicApiBaseUrlForStage(stage);
-
-    // Dead-letter queue first so main queue can reference it.
-    // Visibility timeout 5m on main queue (worker timeout ≤ 4m leaves headroom).
-    this.deleteDlq = new sqs.Queue(this, "TripDeleteDlq", {
-      queueName: `tripplan-trip-delete-dlq-${stage}`,
-      retentionPeriod: cdk.Duration.days(14),
-      encryption: sqs.QueueEncryption.SQS_MANAGED,
-      removalPolicy: prod
-        ? cdk.RemovalPolicy.RETAIN
-        : cdk.RemovalPolicy.DESTROY,
-    });
-
-    this.tripDeleteQueue = new sqs.Queue(this, "TripDeleteQueue", {
-      queueName: `tripplan-trip-delete-${stage}`,
-      visibilityTimeout: cdk.Duration.minutes(5),
-      retentionPeriod: cdk.Duration.days(4),
-      encryption: sqs.QueueEncryption.SQS_MANAGED,
-      deadLetterQueue: {
-        queue: this.deleteDlq,
-        maxReceiveCount: 5,
-      },
-      removalPolicy: prod
-        ? cdk.RemovalPolicy.RETAIN
-        : cdk.RemovalPolicy.DESTROY,
-    });
-
-    // Minimal ops signal until ObservabilityStack wires full dashboards (PR17).
-    new cloudwatch.Alarm(this, "TripDeleteDlqDepthAlarm", {
-      alarmName: `tripplan-${stage}-delete-dlq-depth`,
-      alarmDescription:
-        "Trip-delete DLQ has visible messages — cascade failed after maxReceiveCount",
-      metric: this.deleteDlq.metricApproximateNumberOfMessagesVisible({
-        period: cdk.Duration.minutes(5),
-        statistic: "Maximum",
-      }),
-      threshold: 1,
-      evaluationPeriods: 1,
-      comparisonOperator:
-        cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
-
-    const commonBundling = {
-      minify: true,
-      sourceMap: true,
-      target: "node22",
-      format: OutputFormat.ESM,
-      mainFields: ["module", "main"] as string[],
-      banner:
-        "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
-      externalModules: ["@aws-sdk/*"],
-    };
 
     this.apiFunction = new NodejsFunction(this, "ApiHandler", {
       functionName: `tripplan-api-${stage}`,
@@ -149,7 +79,6 @@ export class ApiStack extends cdk.Stack {
       environment: {
         TABLE_NAME: table.tableName,
         DOCS_BUCKET_NAME: documentsBucket.bucketName,
-        TRIP_DELETE_QUEUE_URL: this.tripDeleteQueue.queueUrl,
         AUTH_ISSUER: "https://auth.ericminassian.com",
         AUTH_AUDIENCE: "plan",
         STAGE: stage,
@@ -159,45 +88,24 @@ export class ApiStack extends cdk.Stack {
           : {}),
         NODE_OPTIONS: "--enable-source-maps",
       },
-      bundling: commonBundling,
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: "node22",
+        format: OutputFormat.ESM,
+        mainFields: ["module", "main"],
+        banner:
+          "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+        // Keep Effect + auth SDK in the bundle so Lambda has no node_modules layout issues.
+        externalModules: ["@aws-sdk/*"],
+      },
       description: `TripPlan HTTP API (${stage}) — trips, items, shares, attachments`,
     });
 
-    // Worker: cascade sessions (GSI3) + TRIP# partition + S3 prefix + status=deleted.
-    // Timeout 4m < queue visibility 5m so in-flight messages are not redelivered mid-run.
-    this.tripDeleteWorker = new NodejsFunction(this, "TripDeleteWorker", {
-      functionName: `tripplan-trip-delete-${stage}`,
-      entry: tripDeleteWorkerEntry,
-      handler: "handler",
-      runtime: lambda.Runtime.NODEJS_22_X,
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 512,
-      timeout: cdk.Duration.minutes(4),
-      tracing: lambda.Tracing.ACTIVE,
-      logRetention,
-      environment: {
-        TABLE_NAME: table.tableName,
-        DOCS_BUCKET_NAME: documentsBucket.bucketName,
-        STAGE: stage,
-        NODE_OPTIONS: "--enable-source-maps",
-      },
-      bundling: commonBundling,
-      description: `TripPlan trip-delete cascade worker (${stage})`,
-    });
-
-    this.tripDeleteWorker.addEventSource(
-      new lambdaEventSources.SqsEventSource(this.tripDeleteQueue, {
-        batchSize: 1,
-        reportBatchItemFailures: false,
-      }),
-    );
-
-    // R/W for trip/item/share/ATT single-table access (API + worker).
+    // R/W for trip/item/share/ATT single-table access.
     table.grantReadWriteData(this.apiFunction);
-    table.grantReadWriteData(this.tripDeleteWorker);
     // Presign is SigV4 (no IAM on client); Lambda needs HeadObject, tagging, delete.
     documentsBucket.grantReadWrite(this.apiFunction);
-    documentsBucket.grantReadWrite(this.tripDeleteWorker);
     // Tagging for pending=true lifecycle (IBucket has no .grant helper).
     this.apiFunction.addToRolePolicy(
       new iam.PolicyStatement({
@@ -209,8 +117,6 @@ export class ApiStack extends cdk.Stack {
         resources: [documentsBucket.arnForObjects("*")],
       }),
     );
-    // API enqueues cascade; worker consumes (event source grant covers receive/delete).
-    this.tripDeleteQueue.grantSendMessages(this.apiFunction);
 
     this.httpApi = new apigwv2.HttpApi(this, "HttpApi", {
       apiName: `tripplan-${stage}`,
@@ -257,7 +163,7 @@ export class ApiStack extends cdk.Stack {
     // Owner — JWT verified in Lambda (OIDC), not Cognito / APIGW JWT authorizer
     this.httpApi.addRoutes({
       path: "/api/v1/me",
-      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
+      methods: [apigwv2.HttpMethod.GET],
       integration,
     });
 
@@ -287,24 +193,6 @@ export class ApiStack extends cdk.Stack {
       value: this.apiFunction.functionName,
       description: "API Lambda function name",
       exportName: `tripplan-${stage}-api-function-name`,
-    });
-
-    new cdk.CfnOutput(this, "TripDeleteQueueUrl", {
-      value: this.tripDeleteQueue.queueUrl,
-      description: "Trip-delete SQS queue URL",
-      exportName: `tripplan-${stage}-trip-delete-queue-url`,
-    });
-
-    new cdk.CfnOutput(this, "TripDeleteDlqUrl", {
-      value: this.deleteDlq.queueUrl,
-      description: "Trip-delete DLQ URL (ObservabilityStack deleteDlq)",
-      exportName: `tripplan-${stage}-trip-delete-dlq-url`,
-    });
-
-    new cdk.CfnOutput(this, "TripDeleteWorkerName", {
-      value: this.tripDeleteWorker.functionName,
-      description: "Trip-delete cascade worker Lambda name",
-      exportName: `tripplan-${stage}-trip-delete-worker-name`,
     });
   }
 }

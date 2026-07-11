@@ -91,23 +91,10 @@ export interface TripRepository {
   ) => Effect.Effect<Trip, AppError>;
 
   /**
-   * Mark trip for async cascade delete: status=deleting + deletedAt (+ optional ttl).
-   * Idempotent when already `deleting` (returns current meta so caller can re-enqueue).
-   * 404 if missing or already `deleted`.
-   * Child rows / sessions / S3 are purged by the trip-delete worker (PR 15).
+   * Interim soft-delete: status=deleted + deletedAt. No child cascade.
+   * 404 if already missing/deleted.
    */
-  readonly markDeleting: (
-    ownerId: string,
-    tripId: string,
-  ) => Effect.Effect<Trip, AppError>;
-
-  /**
-   * Finalize cascade: status=deleted (meta retained until Dynamo TTL).
-   * No-op when already deleted **and** ttl is present. If already deleted
-   * but missing ttl (pre-PR15 interim soft-delete), backfills ttl/deletedAt.
-   * Used by the trip-delete worker.
-   */
-  readonly markDeleted: (
+  readonly softDelete: (
     ownerId: string,
     tripId: string,
   ) => Effect.Effect<Trip, AppError>;
@@ -422,43 +409,17 @@ export function makeInMemoryTripRepo(
         catch: (e) => (e instanceof AppError ? e : AppError.internal()),
       }),
 
-    markDeleting: (ownerId, tripId) =>
+    softDelete: (ownerId, tripId) =>
       Effect.try({
         try: () => {
           const existing = store.get(tripKey(ownerId, tripId));
-          if (existing === undefined || existing.status === "deleted") {
+          if (existing === undefined || !isVisibleToOwner(existing)) {
             throw AppError.notFound("Trip not found");
-          }
-          // Idempotent: already deleting — return meta so caller can re-enqueue.
-          if (existing.status === "deleting") {
-            return existing;
-          }
-          const deleting: Trip = {
-            ...existing,
-            status: "deleting",
-            deletedAt: nowInstant(),
-            version: existing.version + 1,
-          };
-          store.set(tripKey(ownerId, tripId), deleting);
-          return deleting;
-        },
-        catch: (e) => (e instanceof AppError ? e : AppError.internal()),
-      }),
-
-    markDeleted: (ownerId, tripId) =>
-      Effect.try({
-        try: () => {
-          const existing = store.get(tripKey(ownerId, tripId));
-          if (existing === undefined) {
-            throw AppError.notFound("Trip not found");
-          }
-          if (existing.status === "deleted") {
-            return existing;
           }
           const deleted: Trip = {
             ...existing,
             status: "deleted",
-            deletedAt: existing.deletedAt ?? nowInstant(),
+            deletedAt: nowInstant(),
             version: existing.version + 1,
           };
           store.set(tripKey(ownerId, tripId), deleted);

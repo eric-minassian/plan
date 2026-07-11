@@ -4,6 +4,8 @@ import type {
   CreateShareGrant,
   CreateShareResponse,
   CreateTrip,
+  EnrichFlightRequest,
+  FlightEnrichmentResponse,
   ItineraryItem,
   ShareListResponse,
   ShareTripDTO,
@@ -12,6 +14,7 @@ import type {
 } from "@tripplan/domain";
 import {
   decodeCreateShareResponse,
+  decodeFlightEnrichmentResponse,
   decodeItemResponse,
   decodeShareListResponse,
   decodeShareTripResponse,
@@ -59,6 +62,7 @@ export interface TripPlanApi {
     input?: CreateShareGrant,
   ): Promise<CreateShareResponse>;
   revokeShare(tripId: string, shareId: string): Promise<void>;
+  enrichFlight(input: EnrichFlightRequest): Promise<FlightEnrichmentResponse>;
 }
 
 export interface TripPlanApiOptions {
@@ -177,6 +181,17 @@ export function createTripPlanApi(
         `/api/v1/trips/${encodeURIComponent(tripId)}/shares/${encodeURIComponent(shareId)}`,
         { method: "DELETE" },
         options,
+      );
+    },
+    enrichFlight(input) {
+      return request(
+        "/api/v1/enrich/flight",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        },
+        decodeFlightEnrichmentResponse,
       );
     },
   };

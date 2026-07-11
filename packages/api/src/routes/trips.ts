@@ -7,7 +7,6 @@ import {
 import { Effect, Either, Schema as S } from "effect";
 import { CurrentOwner } from "../auth/current-owner.js";
 import type { ApiConfig } from "../config.js";
-import { ErrorCode } from "@tripplan/domain";
 import { AppError } from "../errors/app-error.js";
 import {
   decodeJsonBody,
@@ -16,9 +15,7 @@ import {
 } from "../http/decode.js";
 import { RequestContext } from "../http/request-context.js";
 import { getHeader, jsonResponse, type HttpResponse } from "../http/types.js";
-import { consoleLogger } from "../logging/logger.js";
 import { TripRepo, TRIP_LIST_PAGE_SIZE } from "../repos/trip-repo.js";
-import { TripDeleteQueue } from "../sqs/trip-delete-queue.js";
 
 /** Owner trip GET/export payload: meta + items ordered by sortKey. */
 export interface TripDetailResponse extends Trip {
@@ -225,21 +222,15 @@ export function handlePatchTrip(): Effect.Effect<
 }
 
 /**
- * DELETE /api/v1/trips/:tripId — mark status=deleting, enqueue SQS cascade.
- * Feature flag `tripsDeleteEnabled` (default on). Returns 200 `{ status: "deleting" }`.
- * Idempotent while already deleting (re-enqueues worker).
- *
- * markDeleting + enqueue is not atomic: if enqueue fails after the Dynamo
- * update, the trip is already non-listable (`deleting`). Clients should
- * **retry DELETE** (idempotent re-enqueue). Structured log:
- * `markDeletingSucceeded enqueueFailed`.
+ * DELETE /api/v1/trips/:tripId — interim soft-delete (status=deleted).
+ * Feature flag `tripsDeleteEnabled` (default on).
  */
 export function handleDeleteTrip(
   config: Pick<ApiConfig, "tripsDeleteEnabled">,
 ): Effect.Effect<
   HttpResponse,
   AppError,
-  CurrentOwner | TripRepo | TripDeleteQueue | RequestContext
+  CurrentOwner | TripRepo | RequestContext
 > {
   return Effect.gen(function* () {
     if (!config.tripsDeleteEnabled) {
@@ -249,42 +240,12 @@ export function handleDeleteTrip(
     }
     const principal = yield* CurrentOwner;
     const trips = yield* TripRepo;
-    const queue = yield* TripDeleteQueue;
-    const { pathParams, request } = yield* RequestContext;
+    const { pathParams } = yield* RequestContext;
     const tripId = yield* requirePathParam(pathParams, "tripId");
-    const trip = yield* trips.markDeleting(principal.sub, tripId);
-
-    const enqueued = yield* Effect.either(
-      queue.enqueue({
-        tripId: trip.tripId,
-        ownerId: principal.sub,
-      }),
-    );
-    if (Either.isLeft(enqueued)) {
-      // Trip is already deleting — client must retry DELETE to re-enqueue.
-      consoleLogger.log("error", "markDeletingSucceeded enqueueFailed", {
-        tripId: trip.tripId,
-        requestId: request.requestId,
-        recovery: "retry_delete",
-      });
-      return yield* Effect.fail(
-        new AppError({
-          type: ErrorCode.InternalError,
-          message:
-            "Trip marked deleting but cascade enqueue failed; retry DELETE",
-          retryable: true,
-          details: {
-            tripId: trip.tripId,
-            status: "deleting",
-            recovery: "retry_delete",
-          },
-        }),
-      );
-    }
-
+    const trip = yield* trips.softDelete(principal.sub, tripId);
     return jsonResponse(200, {
       tripId: trip.tripId,
-      status: "deleting" as const,
+      status: trip.status,
       deletedAt: trip.deletedAt,
       version: trip.version,
     });
@@ -297,7 +258,7 @@ export function makeDeleteTripHandler(
 ): () => Effect.Effect<
   HttpResponse,
   AppError,
-  CurrentOwner | TripRepo | TripDeleteQueue | RequestContext
+  CurrentOwner | TripRepo | RequestContext
 > {
   return () => handleDeleteTrip(config);
 }

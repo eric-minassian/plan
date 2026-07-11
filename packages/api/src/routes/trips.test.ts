@@ -1,7 +1,6 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { makeMockOwnerAuth, mockPrincipal } from "../auth/mock-owner-auth.js";
-import { AppError } from "../errors/app-error.js";
 import type { HttpRequest } from "../http/types.js";
 import { silentLogger } from "../logging/logger.js";
 import {
@@ -9,7 +8,6 @@ import {
   MAX_ACTIVE_TRIPS_PER_OWNER,
 } from "../repos/trip-repo.js";
 import { makeInMemoryUserRepo } from "../repos/user-repo.js";
-import { makeInMemoryTripDeleteQueue } from "../sqs/trip-delete-queue.js";
 import { buildRoutes, handleRequest } from "../router.js";
 
 function baseRequest(
@@ -441,91 +439,7 @@ describe("trip CRUD routes", () => {
     expect(cbody.details.version).toBe(2);
   });
 
-  it("DELETE marks deleting, enqueues SQS, list/GET hide; re-delete re-enqueues", async () => {
-    const tripRepo = makeInMemoryTripRepo();
-    const queue = makeInMemoryTripDeleteQueue();
-    const routeDeps = { ...deps(tripRepo), tripDeleteQueue: queue };
-    const created = await Effect.runPromise(
-      handleRequest(
-        baseRequest({
-          method: "POST",
-          path: "/api/v1/trips",
-          body: createBody,
-        }),
-        routeDeps,
-      ),
-    );
-    const trip = JSON.parse(created.body ?? "{}") as { tripId: string };
-
-    const del = await Effect.runPromise(
-      handleRequest(
-        baseRequest({
-          method: "DELETE",
-          path: `/api/v1/trips/${trip.tripId}`,
-        }),
-        routeDeps,
-      ),
-    );
-    expect(del.status).toBe(200);
-    const delBody = JSON.parse(del.body ?? "{}") as {
-      status: string;
-      deletedAt: string;
-      tripId: string;
-    };
-    expect(delBody.status).toBe("deleting");
-    expect(delBody.deletedAt).toBeDefined();
-    expect(queue.messages).toEqual([
-      { tripId: trip.tripId, ownerId: "owner-1" },
-    ]);
-
-    const get = await Effect.runPromise(
-      handleRequest(
-        baseRequest({
-          method: "GET",
-          path: `/api/v1/trips/${trip.tripId}`,
-        }),
-        routeDeps,
-      ),
-    );
-    expect(get.status).toBe(404);
-
-    const list = await Effect.runPromise(
-      handleRequest(
-        baseRequest({ method: "GET", path: "/api/v1/trips" }),
-        routeDeps,
-      ),
-    );
-    const listBody = JSON.parse(list.body ?? "{}") as { trips: unknown[] };
-    expect(listBody.trips).toHaveLength(0);
-
-    // Idempotent while deleting: re-enqueue for recovery (not 404).
-    const again = await Effect.runPromise(
-      handleRequest(
-        baseRequest({
-          method: "DELETE",
-          path: `/api/v1/trips/${trip.tripId}`,
-        }),
-        routeDeps,
-      ),
-    );
-    expect(again.status).toBe(200);
-    expect(queue.messages).toHaveLength(2);
-
-    // After worker marks deleted, further DELETE → 404.
-    await Effect.runPromise(tripRepo.markDeleted("owner-1", trip.tripId));
-    const afterDeleted = await Effect.runPromise(
-      handleRequest(
-        baseRequest({
-          method: "DELETE",
-          path: `/api/v1/trips/${trip.tripId}`,
-        }),
-        routeDeps,
-      ),
-    );
-    expect(afterDeleted.status).toBe(404);
-  });
-
-  it("DELETE returns 500 with retry_delete when enqueue fails after markDeleting", async () => {
+  it("DELETE soft-deletes; list and GET hide; second delete 404", async () => {
     const tripRepo = makeInMemoryTripRepo();
     const created = await Effect.runPromise(
       handleRequest(
@@ -539,40 +453,53 @@ describe("trip CRUD routes", () => {
     );
     const trip = JSON.parse(created.body ?? "{}") as { tripId: string };
 
-    const failingQueue = {
-      enqueue: () => Effect.fail(AppError.internal()),
-    };
-
-    const response = await Effect.runPromise(
+    const del = await Effect.runPromise(
       handleRequest(
         baseRequest({
           method: "DELETE",
           path: `/api/v1/trips/${trip.tripId}`,
         }),
-        {
-          ...deps(tripRepo),
-          tripDeleteQueue: failingQueue,
-        },
+        deps(tripRepo),
       ),
     );
-    expect(response.status).toBe(500);
-    const body = JSON.parse(response.body ?? "{}") as {
-      type: string;
-      retryable: boolean;
-      details: { recovery: string; status: string };
-      message: string;
+    expect(del.status).toBe(200);
+    const delBody = JSON.parse(del.body ?? "{}") as {
+      status: string;
+      deletedAt: string;
     };
-    expect(body.type).toBe("InternalError");
-    expect(body.retryable).toBe(true);
-    expect(body.details.recovery).toBe("retry_delete");
-    expect(body.details.status).toBe("deleting");
-    expect(body.message).toMatch(/retry DELETE/i);
+    expect(delBody.status).toBe("deleted");
+    expect(delBody.deletedAt).toBeDefined();
 
-    // Trip is stuck deleting until client retries DELETE with a healthy queue.
-    const meta = await Effect.runPromise(
-      tripRepo.getByTripId(trip.tripId),
+    const get = await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "GET",
+          path: `/api/v1/trips/${trip.tripId}`,
+        }),
+        deps(tripRepo),
+      ),
     );
-    expect(meta?.status).toBe("deleting");
+    expect(get.status).toBe(404);
+
+    const list = await Effect.runPromise(
+      handleRequest(
+        baseRequest({ method: "GET", path: "/api/v1/trips" }),
+        deps(tripRepo),
+      ),
+    );
+    const listBody = JSON.parse(list.body ?? "{}") as { trips: unknown[] };
+    expect(listBody.trips).toHaveLength(0);
+
+    const again = await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "DELETE",
+          path: `/api/v1/trips/${trip.tripId}`,
+        }),
+        deps(tripRepo),
+      ),
+    );
+    expect(again.status).toBe(404);
   });
 
   it("DELETE returns 403 when tripsDeleteEnabled is false", async () => {

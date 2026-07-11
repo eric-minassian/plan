@@ -78,7 +78,7 @@ describeIt("DynamoDB trip access patterns (1, 2a)", () => {
     );
     expect(missing).toBeUndefined();
 
-    await Effect.runPromise(repo.markDeleting(ownerId, created.tripId));
+    await Effect.runPromise(repo.softDelete(ownerId, created.tripId));
     const afterDelete = await Effect.runPromise(
       repo.getActiveForOwner(ownerId, created.tripId),
     );
@@ -99,7 +99,7 @@ describeIt("DynamoDB trip access patterns (1, 2a)", () => {
       );
       ids.push(t.tripId);
     }
-    await Effect.runPromise(repo.markDeleting(owner, ids[0] as string));
+    await Effect.runPromise(repo.softDelete(owner, ids[0] as string));
     const expectedActive = new Set(ids.slice(1));
 
     const collected: string[] = [];

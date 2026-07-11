@@ -84,21 +84,6 @@ export {
   type DocsStoreService,
   type MockDocsStore,
 } from "./s3/docs-store.js";
-export {
-  TripDeleteQueue,
-  makeInMemoryTripDeleteQueue,
-  makeSqsTripDeleteQueue,
-  parseTripDeleteMessage,
-  serializeTripDeleteMessage,
-  type TripDeleteMessage,
-  type TripDeleteQueueService,
-  type InMemoryTripDeleteQueue,
-} from "./sqs/trip-delete-queue.js";
-export {
-  createTripDeleteWorkerHandler,
-  runTripDeleteCascade,
-  handler as tripDeleteWorkerHandler,
-} from "./workers/trip-delete-worker.js";
 export type {
   AuthClass,
   HttpRequest,
