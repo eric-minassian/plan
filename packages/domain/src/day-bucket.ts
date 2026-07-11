@@ -71,14 +71,26 @@ export function civilDateInTimeZone(instant: string, timeZone: string): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * Order by absolute Instant (epoch ms), then sortKey.
+ * Lexicographic Instant string compare is wrong for mixed offsets
+ * (e.g. `…T18:00:00Z` vs `…T01:00:00+09:00` on the same Tokyo civil day).
+ */
 function compareItemsWithinDay<T extends BucketableItem>(a: T, b: T): number {
   const aStart = a.startAt;
   const bStart = b.startAt;
-  if (aStart !== undefined && bStart !== undefined && aStart !== bStart) {
-    return aStart < bStart ? -1 : 1;
+  if (aStart !== undefined && bStart !== undefined) {
+    const aMs = Date.parse(aStart);
+    const bMs = Date.parse(bStart);
+    if (!Number.isNaN(aMs) && !Number.isNaN(bMs) && aMs !== bMs) {
+      return aMs - bMs;
+    }
+    // Both unparseable or equal ms: fall through to sortKey.
+  } else if (aStart !== undefined && bStart === undefined) {
+    return -1;
+  } else if (aStart === undefined && bStart !== undefined) {
+    return 1;
   }
-  if (aStart !== undefined && bStart === undefined) return -1;
-  if (aStart === undefined && bStart !== undefined) return 1;
 
   const aKey = a.sortKey;
   const bKey = b.sortKey;

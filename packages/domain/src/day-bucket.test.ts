@@ -56,13 +56,28 @@ describe("bucketItemsByDay", () => {
     expect(result.days[1]).toMatchObject({ date: "2024-06-07", dayNumber: 7 });
   });
 
-  it("sorts items within a day by startAt then sortKey", () => {
+  it("sorts items within a day by absolute Instant then sortKey", () => {
     const items = [
       { id: "late", startAt: "2024-07-01T18:00:00Z" as const, sortKey: 1 },
       { id: "early", startAt: "2024-07-01T08:00:00Z" as const, sortKey: 9 },
     ];
     const result = bucketItemsByDay(items, "UTC");
     expect(result.days[0]?.items.map((i) => i.id)).toEqual(["early", "late"]);
+  });
+
+  it("orders mixed-offset Instants by absolute time within a Tokyo civil day", () => {
+    // Both civil 2024-06-11 in Asia/Tokyo:
+    // B = 2024-06-11T01:00:00+09:00 → 2024-06-10T16:00:00Z (earlier)
+    // A = 2024-06-10T18:00:00Z      → 2024-06-11T03:00:00+09:00 (later)
+    // Lexicographic string order would put A before B; absolute order is B then A.
+    const items = [
+      { id: "A", startAt: "2024-06-10T18:00:00Z" as const },
+      { id: "B", startAt: "2024-06-11T01:00:00+09:00" as const },
+    ];
+    const result = bucketItemsByDay(items, "Asia/Tokyo");
+    expect(result.days).toHaveLength(1);
+    expect(result.days[0]?.date).toBe("2024-06-11");
+    expect(result.days[0]?.items.map((i) => i.id)).toEqual(["B", "A"]);
   });
 
   it("places items without startAt into unscheduled", () => {
