@@ -20,6 +20,7 @@ import {
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { BusyIcon } from "./BusyIcon.tsx";
+import { BusyStatus } from "./BusyStatus.tsx";
 import type {
   CreateShareResponse,
   ShareGrantPublic,
@@ -240,10 +241,7 @@ export function SharePanel(props: SharePanelProps) {
         ) : null}
 
         {loading && shares.length === 0 ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <BusyIcon />
-            Loading shares…
-          </div>
+          <BusyStatus>Loading shares…</BusyStatus>
         ) : null}
 
         {active.length === 0 && !loading ? (

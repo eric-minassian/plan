@@ -5,7 +5,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@eric-minassian/design/components/card";
-import { BusyIcon } from "../components/BusyIcon.tsx";
+import { BusyStatus } from "../components/BusyStatus.tsx";
 import { AuthError } from "@ericminassian/auth/client";
 import { useAuth } from "@ericminassian/auth/react";
 import { useEffect, useState } from "react";
@@ -97,11 +97,12 @@ export function AuthCallbackPage() {
 
   return (
     <Card>
-      <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-        <BusyIcon />
-        {state.status === "authenticated"
-          ? "Signed in — redirecting…"
-          : "Completing sign-in…"}
+      <CardContent className="py-6">
+        <BusyStatus className="flex items-center gap-2 text-sm text-muted-foreground">
+          {state.status === "authenticated"
+            ? "Signed in — redirecting…"
+            : "Completing sign-in…"}
+        </BusyStatus>
       </CardContent>
     </Card>
   );
