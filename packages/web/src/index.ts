@@ -1,6 +1,7 @@
 /**
- * @tripplan/web — library re-exports (app entry is main.tsx).
+ * @tripplan/web — React SPA entry (scaffold).
+ * UI and Vite app shell land in follow-up PRs.
  */
-export { App, type AppProps } from "./App.tsx";
-export { loadConfig, type AppConfig } from "./config.ts";
+export { DOMAIN_PACKAGE } from "@tripplan/domain";
+
 export const WEB_PACKAGE = "@tripplan/web" as const;

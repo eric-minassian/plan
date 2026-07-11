@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeMockOwnerAuth, mockPrincipal } from "./auth/mock-owner-auth.js";
 import { createHandler } from "./handler.js";
 import { silentLogger } from "./logging/logger.js";
+import { makeInMemoryTripRepo } from "./repos/trip-repo.js";
 import { makeInMemoryUserRepo } from "./repos/user-repo.js";
 
 function event(
@@ -64,6 +65,7 @@ describe("Lambda handler", () => {
     const handler = createHandler({
       ownerAuth: makeMockOwnerAuth(null),
       userRepo: makeInMemoryUserRepo(),
+      tripRepo: makeInMemoryTripRepo(),
       logger: silentLogger,
     });
     const result = await handler(
@@ -85,6 +87,7 @@ describe("Lambda handler", () => {
         mockPrincipal({ sub: "owner-1", nickname: "Sam" }),
       ),
       userRepo: makeInMemoryUserRepo(),
+      tripRepo: makeInMemoryTripRepo(),
       logger: silentLogger,
     });
     const result = await handler(

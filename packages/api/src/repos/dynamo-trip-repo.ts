@@ -1,0 +1,573 @@
+import type { Trip } from "@tripplan/domain";
+import { normalizeInstant } from "@tripplan/domain";
+import {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+} from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+  type NativeAttributeValue,
+} from "@aws-sdk/lib-dynamodb";
+import { Effect, Either } from "effect";
+import { AppError, internalFromCause } from "../errors/app-error.js";
+import {
+  MAX_ACTIVE_TRIPS_PER_OWNER,
+  TRIP_LIST_PAGE_SIZE,
+  type ListTripsResult,
+  type TripRepository,
+} from "./trip-repo.js";
+
+/** Dynamo single-table trip meta item (PK/SK + GSI1 + domain attrs). */
+export interface TripItem {
+  readonly PK: string;
+  readonly SK: string;
+  readonly GSI1PK: string;
+  readonly GSI1SK: string;
+  readonly entityType: "TRIP";
+  readonly tripId: string;
+  readonly ownerId: string;
+  readonly title: string;
+  readonly timezone: string;
+  readonly startDate: string;
+  readonly endDate: string;
+  readonly version: number;
+  readonly status: "active" | "deleting" | "deleted";
+  readonly deletedAt?: string;
+}
+
+export function userPk(ownerId: string): string {
+  return `USER#${ownerId}`;
+}
+
+export function tripSk(tripId: string): string {
+  return `TRIP#${tripId}`;
+}
+
+function gsi1Pk(tripId: string): string {
+  return `TRIP#${tripId}`;
+}
+
+function isVisibleStatus(status: string): boolean {
+  return status === "active";
+}
+
+export function itemToTrip(item: TripItem): Trip {
+  const trip: Trip = {
+    tripId: item.tripId,
+    ownerId: item.ownerId,
+    title: item.title,
+    timezone: item.timezone as Trip["timezone"],
+    startDate: item.startDate as Trip["startDate"],
+    endDate: item.endDate as Trip["endDate"],
+    version: item.version,
+    status: item.status,
+  };
+  if (item.deletedAt !== undefined) {
+    return { ...trip, deletedAt: item.deletedAt as Trip["deletedAt"] };
+  }
+  return trip;
+}
+
+function requireDateRange(
+  startDate: string,
+  endDate: string,
+): Effect.Effect<void, AppError> {
+  if (endDate < startDate) {
+    return Effect.fail(
+      AppError.validation("endDate must be on or after startDate"),
+    );
+  }
+  return Effect.void;
+}
+
+/** Encode ExclusiveStartKey-style cursor (PK/SK of last returned item). */
+export function encodeCursor(
+  key: Record<string, NativeAttributeValue>,
+): string {
+  return Buffer.from(JSON.stringify(key), "utf8").toString("base64url");
+}
+
+/**
+ * Decode + validate list cursor for an owner partition.
+ * Cursor must be `{ PK: USER#ownerId, SK: TRIP#... }`.
+ */
+export function parseListCursor(
+  cursor: string,
+  ownerId: string,
+): Record<string, NativeAttributeValue> {
+  let parsed: unknown;
+  try {
+    const json = Buffer.from(cursor, "base64url").toString("utf8");
+    parsed = JSON.parse(json) as unknown;
+  } catch {
+    throw AppError.validation("Invalid cursor");
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw AppError.validation("Invalid cursor");
+  }
+  const record = parsed as Record<string, unknown>;
+  const pk = record.PK;
+  const sk = record.SK;
+  if (typeof pk !== "string" || typeof sk !== "string") {
+    throw AppError.validation("Invalid cursor");
+  }
+  if (pk !== userPk(ownerId) || !sk.startsWith("TRIP#") || sk.length <= 5) {
+    throw AppError.validation("Invalid cursor");
+  }
+  return { PK: pk, SK: sk };
+}
+
+function isDynamoValidationException(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "name" in cause &&
+    (cause as { name: string }).name === "ValidationException"
+  );
+}
+
+function mapDynamoError(cause: unknown): AppError {
+  if (cause instanceof AppError) {
+    return cause;
+  }
+  return internalFromCause(cause, { component: "dynamo-trip-repo" });
+}
+
+function cursorFromItem(item: TripItem): string {
+  return encodeCursor({ PK: item.PK, SK: item.SK });
+}
+
+/**
+ * Page active trips from Query results without dropping mid-page matches.
+ *
+ * When the page fills mid-`Items` array, nextCursor is the last **returned**
+ * item's PK/SK (not Dynamo LastEvaluatedKey, which would skip remainder).
+ * When the page fills exactly at end of a batch and LEK exists, use LEK.
+ * When LEK is absent but unconsumed matching items remain, still emit cursor
+ * from last returned item.
+ */
+export function accumulateActivePage(input: {
+  readonly limit: number;
+  readonly batches: readonly {
+    readonly items: readonly TripItem[];
+    readonly lastEvaluatedKey:
+      | Record<string, NativeAttributeValue>
+      | undefined;
+  }[];
+}): ListTripsResult {
+  const trips: Trip[] = [];
+  let nextCursor: string | undefined;
+
+  for (const batch of input.batches) {
+    let consumed = 0;
+    for (const item of batch.items) {
+      if (trips.length >= input.limit) {
+        break;
+      }
+      trips.push(itemToTrip(item));
+      consumed += 1;
+    }
+
+    if (trips.length >= input.limit) {
+      if (consumed < batch.items.length) {
+        // Mid-page: residual matches in this batch must not be skipped.
+        const last = batch.items[consumed - 1];
+        if (last !== undefined) {
+          nextCursor = cursorFromItem(last);
+        }
+      } else if (batch.lastEvaluatedKey !== undefined) {
+        nextCursor = encodeCursor(batch.lastEvaluatedKey);
+      } else {
+        nextCursor = undefined;
+      }
+      break;
+    }
+
+    if (batch.lastEvaluatedKey === undefined) {
+      nextCursor = undefined;
+      break;
+    }
+    // Continue to next batch (caller feeds sequential batches).
+  }
+
+  return { trips, nextCursor };
+}
+
+/**
+ * DynamoDB single-table TripRepository.
+ * PK=USER#ownerId SK=TRIP#tripId; GSI1PK=TRIP#tripId GSI1SK=META.
+ *
+ * Active-trip quota (100) is check-then-act (**best-effort** under concurrent
+ * creates). Soft-deleted rows do not count. Atomic counter deferred post-v1.
+ */
+export function makeDynamoTripRepo(
+  tableName: string,
+  client: DynamoDBDocumentClient = DynamoDBDocumentClient.from(
+    new DynamoDBClient({}),
+  ),
+): TripRepository {
+  const getItem = (
+    ownerId: string,
+    tripId: string,
+  ): Effect.Effect<TripItem | undefined, AppError> =>
+    Effect.tryPromise({
+      try: async () => {
+        const result = await client.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+          }),
+        );
+        if (result.Item === undefined) {
+          return undefined;
+        }
+        return result.Item as TripItem;
+      },
+      catch: mapDynamoError,
+    });
+
+  /**
+   * COUNT active trips in owner partition.
+   * Cost grows with historical soft-deleted metas until cascade purge (PR 15);
+   * acceptable for dogfood at ≤100 actives.
+   */
+  const countActive = (ownerId: string): Effect.Effect<number, AppError> =>
+    Effect.tryPromise({
+      try: async () => {
+        let count = 0;
+        let exclusiveStartKey: Record<string, NativeAttributeValue> | undefined;
+        do {
+          const result = await client.send(
+            new QueryCommand({
+              TableName: tableName,
+              KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+              FilterExpression: "#status = :active",
+              ExpressionAttributeNames: { "#status": "status" },
+              ExpressionAttributeValues: {
+                ":pk": userPk(ownerId),
+                ":sk": "TRIP#",
+                ":active": "active",
+              },
+              Select: "COUNT",
+              ExclusiveStartKey: exclusiveStartKey,
+            }),
+          );
+          count += result.Count ?? 0;
+          exclusiveStartKey = result.LastEvaluatedKey;
+        } while (exclusiveStartKey !== undefined);
+        return count;
+      },
+      catch: mapDynamoError,
+    });
+
+  return {
+    create: (ownerId, input) =>
+      Effect.gen(function* () {
+        yield* requireDateRange(input.startDate, input.endDate);
+        const activeCount = yield* countActive(ownerId);
+        if (activeCount >= MAX_ACTIVE_TRIPS_PER_OWNER) {
+          return yield* Effect.fail(
+            AppError.validation(
+              `Active trip limit reached (max ${MAX_ACTIVE_TRIPS_PER_OWNER})`,
+              { maxActiveTrips: MAX_ACTIVE_TRIPS_PER_OWNER },
+            ),
+          );
+        }
+        const tripId = crypto.randomUUID();
+        const trip: Trip = {
+          tripId,
+          ownerId,
+          title: input.title,
+          timezone: input.timezone,
+          startDate: input.startDate,
+          endDate: input.endDate,
+          version: 1,
+          status: "active",
+        };
+        const item: TripItem = {
+          PK: userPk(ownerId),
+          SK: tripSk(tripId),
+          GSI1PK: gsi1Pk(tripId),
+          GSI1SK: "META",
+          entityType: "TRIP",
+          tripId,
+          ownerId,
+          title: trip.title,
+          timezone: trip.timezone,
+          startDate: trip.startDate,
+          endDate: trip.endDate,
+          version: 1,
+          status: "active",
+        };
+        yield* Effect.tryPromise({
+          try: () =>
+            client.send(
+              new PutCommand({
+                TableName: tableName,
+                Item: item,
+                ConditionExpression:
+                  "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+              }),
+            ),
+          catch: mapDynamoError,
+        });
+        return trip;
+      }),
+
+    getActiveForOwner: (ownerId, tripId) =>
+      Effect.gen(function* () {
+        const item = yield* getItem(ownerId, tripId);
+        if (item === undefined || !isVisibleStatus(item.status)) {
+          return undefined;
+        }
+        return itemToTrip(item);
+      }),
+
+    listActiveForOwner: (ownerId, options) =>
+      Effect.tryPromise({
+        try: async () => {
+          const limit = options.limit ?? TRIP_LIST_PAGE_SIZE;
+          if (limit < 1 || limit > TRIP_LIST_PAGE_SIZE) {
+            throw AppError.validation(
+              `limit must be between 1 and ${TRIP_LIST_PAGE_SIZE}`,
+            );
+          }
+
+          let exclusiveStartKey:
+            | Record<string, NativeAttributeValue>
+            | undefined =
+            options.cursor !== undefined && options.cursor.length > 0
+              ? parseListCursor(options.cursor, ownerId)
+              : undefined;
+
+          const trips: Trip[] = [];
+          let nextCursor: string | undefined;
+
+          // FilterExpression applies after Limit; page until we fill `limit`
+          // actives or exhaust the partition (access pattern 1).
+          while (trips.length < limit) {
+            const need = limit - trips.length;
+            const result = await client.send(
+              new QueryCommand({
+                TableName: tableName,
+                KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+                FilterExpression: "#status = :active",
+                ExpressionAttributeNames: { "#status": "status" },
+                ExpressionAttributeValues: {
+                  ":pk": userPk(ownerId),
+                  ":sk": "TRIP#",
+                  ":active": "active",
+                },
+                // Over-fetch raw keys to compensate for filtered deleted rows.
+                Limit: Math.max(need * 3, 10),
+                ExclusiveStartKey: exclusiveStartKey,
+              }),
+            );
+
+            const batchItems = (result.Items ?? []) as TripItem[];
+            let consumed = 0;
+            for (const raw of batchItems) {
+              if (trips.length >= limit) {
+                break;
+              }
+              trips.push(itemToTrip(raw));
+              consumed += 1;
+            }
+
+            if (trips.length >= limit) {
+              if (consumed < batchItems.length) {
+                // Mid-batch residual: cursor at last returned item, not LEK.
+                const lastReturned = batchItems[consumed - 1];
+                nextCursor =
+                  lastReturned !== undefined
+                    ? cursorFromItem(lastReturned)
+                    : undefined;
+              } else if (result.LastEvaluatedKey !== undefined) {
+                nextCursor = encodeCursor(result.LastEvaluatedKey);
+              } else {
+                nextCursor = undefined;
+              }
+              break;
+            }
+
+            if (result.LastEvaluatedKey === undefined) {
+              nextCursor = undefined;
+              break;
+            }
+            exclusiveStartKey = result.LastEvaluatedKey;
+          }
+
+          const out: ListTripsResult = { trips, nextCursor };
+          return out;
+        },
+        catch: (cause) => {
+          if (cause instanceof AppError) {
+            return cause;
+          }
+          // Malformed ExclusiveStartKey after our shape check, or bad cursor.
+          if (isDynamoValidationException(cause)) {
+            return AppError.validation("Invalid cursor");
+          }
+          return mapDynamoError(cause);
+        },
+      }),
+
+    update: (ownerId, tripId, expectedVersion, patch) =>
+      Effect.gen(function* () {
+        const existingItem = yield* getItem(ownerId, tripId);
+        if (
+          existingItem === undefined ||
+          !isVisibleStatus(existingItem.status)
+        ) {
+          return yield* Effect.fail(AppError.notFound("Trip not found"));
+        }
+        const existing = itemToTrip(existingItem);
+        if (existing.version !== expectedVersion) {
+          return yield* Effect.fail(
+            AppError.conflict("Version mismatch", {
+              version: existing.version,
+            }),
+          );
+        }
+        const startDate = patch.startDate ?? existing.startDate;
+        const endDate = patch.endDate ?? existing.endDate;
+        yield* requireDateRange(startDate, endDate);
+        const title = patch.title ?? existing.title;
+        const timezone = patch.timezone ?? existing.timezone;
+        const newVersion = existing.version + 1;
+
+        const write = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new UpdateCommand({
+                  TableName: tableName,
+                  Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+                  UpdateExpression:
+                    "SET title = :title, #tz = :tz, startDate = :sd, endDate = :ed, #ver = :nv",
+                  ConditionExpression: "#ver = :ev AND #status = :active",
+                  ExpressionAttributeNames: {
+                    "#tz": "timezone",
+                    "#ver": "version",
+                    "#status": "status",
+                  },
+                  ExpressionAttributeValues: {
+                    ":title": title,
+                    ":tz": timezone,
+                    ":sd": startDate,
+                    ":ed": endDate,
+                    ":nv": newVersion,
+                    ":ev": expectedVersion,
+                    ":active": "active",
+                  },
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
+
+        if (Either.isLeft(write)) {
+          const cause = write.left;
+          if (cause instanceof ConditionalCheckFailedException) {
+            // Re-Get current version so client If-Match is not stuck on stale.
+            const live = yield* getItem(ownerId, tripId);
+            if (live === undefined || !isVisibleStatus(live.status)) {
+              return yield* Effect.fail(AppError.notFound("Trip not found"));
+            }
+            return yield* Effect.fail(
+              AppError.conflict("Version mismatch", {
+                version: live.version,
+              }),
+            );
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
+
+        return {
+          ...existing,
+          title,
+          timezone,
+          startDate,
+          endDate,
+          version: newVersion,
+        } satisfies Trip;
+      }),
+
+    softDelete: (ownerId, tripId) =>
+      Effect.gen(function* () {
+        const existingItem = yield* getItem(ownerId, tripId);
+        if (
+          existingItem === undefined ||
+          !isVisibleStatus(existingItem.status)
+        ) {
+          return yield* Effect.fail(AppError.notFound("Trip not found"));
+        }
+        const existing = itemToTrip(existingItem);
+        const deletedAt = normalizeInstant(new Date().toISOString());
+
+        // Condition only on active status — DELETE is not If-Match-gated.
+        // Bump version atomically so concurrent PATCH cannot cause silent
+        // version regression; CCF means already deleted / not active → 404.
+        const write = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new UpdateCommand({
+                  TableName: tableName,
+                  Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+                  UpdateExpression:
+                    "SET #status = :deleted, deletedAt = :da, #ver = #ver + :one",
+                  ConditionExpression: "#status = :active",
+                  ExpressionAttributeNames: {
+                    "#status": "status",
+                    "#ver": "version",
+                  },
+                  ExpressionAttributeValues: {
+                    ":deleted": "deleted",
+                    ":active": "active",
+                    ":da": deletedAt,
+                    ":one": 1,
+                  },
+                  ReturnValues: "ALL_NEW",
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
+
+        if (Either.isLeft(write)) {
+          const cause = write.left;
+          if (cause instanceof ConditionalCheckFailedException) {
+            return yield* Effect.fail(AppError.notFound("Trip not found"));
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
+
+        const attrs = write.right.Attributes as TripItem | undefined;
+        if (attrs !== undefined) {
+          return itemToTrip(attrs);
+        }
+        return {
+          ...existing,
+          status: "deleted" as const,
+          deletedAt: deletedAt as Trip["deletedAt"],
+          version: existing.version + 1,
+        };
+      }),
+  };
+}
+
+/** Build document client for optional injection in tests. */
+export function makeDynamoDocumentClient(
+  client?: DynamoDBClient,
+): DynamoDBDocumentClient {
+  return DynamoDBDocumentClient.from(client ?? new DynamoDBClient({}));
+}

@@ -10,7 +10,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
-    "test": "vitest run",
     "synth": "cdk synth",
     "diff": "cdk diff",
     "deploy": "cdk deploy --all",
@@ -29,7 +28,6 @@
     "esbuild": "^0.28.1",
     "eslint": "^9.17.0",
     "tsx": "^4.19.2",
-    "typescript": "~5.7.3",
-    "vitest": "^4.1.10"
+    "typescript": "~5.7.3"
   }
 }

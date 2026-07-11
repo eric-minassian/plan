@@ -10,7 +10,16 @@ import { loadConfig, type ApiConfig } from "./config.js";
 import { fromApiGatewayEvent, toApiGatewayResult } from "./http/apigw.js";
 import type { HttpRequest } from "./http/types.js";
 import { consoleLogger, type Logger } from "./logging/logger.js";
-import { handleRequestAsync, type RouterDeps } from "./router.js";
+import {
+  buildRoutes,
+  handleRequestAsync,
+  type RouterDeps,
+} from "./router.js";
+import { makeDynamoTripRepo } from "./repos/dynamo-trip-repo.js";
+import {
+  makeInMemoryTripRepo,
+  type TripRepository,
+} from "./repos/trip-repo.js";
 import {
   makeInMemoryUserRepo,
   type UserRepository,
@@ -20,6 +29,7 @@ export interface HandlerOptions {
   readonly config?: ApiConfig;
   readonly ownerAuth?: OwnerAuthService;
   readonly userRepo?: UserRepository;
+  readonly tripRepo?: TripRepository;
   readonly logger?: Logger;
 }
 
@@ -27,17 +37,23 @@ export interface HandlerOptions {
  * Create a Lambda handler for API Gateway HTTP API (payload v2).
  * Owner JWT is verified in-process (no Cognito / APIGW JWT authorizer).
  *
- * Profile store: defaults to process-local in-memory repo (skeleton).
- * `TABLE_NAME` / Dynamo grants are provisioned for the upcoming Dynamo-backed
- * UserRepository — GET /me does not persist across instances yet.
+ * Persistence: when `TABLE_NAME` is set, trips use DynamoDB single-table;
+ * otherwise in-memory (unit tests / local skeleton). User profiles remain
+ * in-memory until a Dynamo UserRepository lands.
  */
 export function createHandler(
   options: HandlerOptions = {},
 ): APIGatewayProxyHandlerV2 {
   const config = options.config ?? loadConfig();
   const logger = options.logger ?? consoleLogger;
-  // Interim until DynamoDB UserRepository (USER#sub / PROFILE) lands.
   const userRepo = options.userRepo ?? makeInMemoryUserRepo();
+  const tripRepo =
+    options.tripRepo ??
+    (config.tableName !== undefined && config.tableName.length > 0
+      ? makeDynamoTripRepo(config.tableName)
+      : makeInMemoryTripRepo());
+
+  const routeTable = buildRoutes(config);
 
   // Mutable request holder so OwnerAuth can read the active request for DPoP.
   let currentRequest: HttpRequest | undefined;
@@ -68,7 +84,9 @@ export function createHandler(
     const deps: RouterDeps = {
       ownerAuth,
       userRepo,
+      tripRepo,
       logger,
+      routes: routeTable,
     };
 
     try {
