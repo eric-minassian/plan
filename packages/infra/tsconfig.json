@@ -1,0 +1,10 @@
+{
+  "extends": "@tripplan/tsconfig/node.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src"]
+}

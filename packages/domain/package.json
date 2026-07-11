@@ -1,0 +1,23 @@
+{
+  "name": "@tripplan/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure domain types, schemas, and logic for TripPlan",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@tripplan/eslint-config": "workspace:*",
+    "@tripplan/tsconfig": "workspace:*",
+    "eslint": "^9.17.0",
+    "typescript": "~5.7.3"
+  }
+}

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Tooling caches
+.turbo/
+.eslintcache
+.cache/
+
+# Test / coverage
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# AWS CDK
+cdk.out/
+cdk.context.json
+
+# IDE / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Misc
+*.local
+.vercel
