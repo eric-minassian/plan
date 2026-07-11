@@ -19,6 +19,5 @@
     "lib": ["ES2022"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext"
-  },
-  "exclude": ["node_modules", "dist"]
+  }
 }
