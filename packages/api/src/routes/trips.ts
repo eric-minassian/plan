@@ -1,7 +1,6 @@
 import {
   CreateTrip,
   UpdateTrip,
-  type ItineraryItem,
   type Trip,
 } from "@tripplan/domain";
 import { Effect, Either, Schema as S } from "effect";
@@ -17,9 +16,9 @@ import { RequestContext } from "../http/request-context.js";
 import { getHeader, jsonResponse, type HttpResponse } from "../http/types.js";
 import { TripRepo, TRIP_LIST_PAGE_SIZE } from "../repos/trip-repo.js";
 
-/** Owner trip GET/export payload: meta + items ordered by sortKey. */
+/** Owner trip GET/export payload: meta + items (items empty until PR 7). */
 export interface TripDetailResponse extends Trip {
-  readonly items: readonly ItineraryItem[];
+  readonly items: readonly unknown[];
 }
 
 export interface TripListResponse {
@@ -27,10 +26,14 @@ export interface TripListResponse {
   readonly nextCursor?: string;
 }
 
+function tripDetail(trip: Trip): TripDetailResponse {
+  return { ...trip, items: [] };
+}
+
 function tripJsonResponse(
   status: number,
   trip: Trip,
-  extras?: { readonly items?: readonly ItineraryItem[] },
+  extras?: { readonly items?: readonly unknown[] },
 ): HttpResponse {
   const body =
     extras?.items !== undefined
@@ -106,7 +109,7 @@ export function handleListTrips(): Effect.Effect<
   });
 }
 
-/** GET /api/v1/trips/:tripId — trip meta + items ordered by sortKey. */
+/** GET /api/v1/trips/:tripId — trip meta + items (items stub). */
 export function handleGetTrip(): Effect.Effect<
   HttpResponse,
   AppError,
@@ -121,11 +124,7 @@ export function handleGetTrip(): Effect.Effect<
     if (trip === undefined) {
       return yield* Effect.fail(AppError.notFound("Trip not found"));
     }
-    // Skip second meta Get — ownership already verified above.
-    const items = yield* trips.listItems(principal.sub, tripId, {
-      tripAlreadyVerified: true,
-    });
-    return tripJsonResponse(200, trip, { items });
+    return tripJsonResponse(200, trip, { items: [] });
   });
 }
 
@@ -144,10 +143,7 @@ export function handleExportTrip(): Effect.Effect<
     if (trip === undefined) {
       return yield* Effect.fail(AppError.notFound("Trip not found"));
     }
-    const items = yield* trips.listItems(principal.sub, tripId, {
-      tripAlreadyVerified: true,
-    });
-    const payload: TripDetailResponse = { ...trip, items };
+    const payload = tripDetail(trip);
     return jsonResponse(200, payload, {
       etag: etagFromVersion(trip.version),
       "content-disposition": `attachment; filename="trip-${trip.tripId}.json"`,

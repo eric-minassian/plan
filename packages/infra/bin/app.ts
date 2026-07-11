@@ -3,39 +3,25 @@ import * as cdk from "aws-cdk-lib";
 import { ApiStack } from "../src/stacks/api-stack.js";
 import { DataStack } from "../src/stacks/data-stack.js";
 import { FoundationStack } from "../src/stacks/foundation-stack.js";
-import { ObservabilityStack } from "../src/stacks/observability-stack.js";
+import { WebStack } from "../src/stacks/web-stack.js";
 import { isProdStage, resolveStage } from "../src/stage.js";
 
 /**
- * TripPlan CDK app — Foundation + Data + Api + Observability (us-east-1).
+ * TripPlan CDK app — Foundation + Data + Api + Web stacks (us-east-1).
  * Stage via context: `pnpm synth -c stage=dev` (default: dev).
  * Allowed stages: dev | staging | prod (unknown values fail synth).
- * Prod requires: `-c alertEmail=ops@example.com` (SNS + budget notifications).
- * Optional: `-c runbookBaseUrl=https://github.com/org/repo/blob/main/packages/infra/runbooks`
  * No Cognito — owner OIDC is external (auth.ericminassian.com).
+ *
+ * Web / CloudFront context (all optional for synth):
+ * - `webDomain` — custom hostname (defaults: prod plan.ericminassian.com,
+ *   staging plan-staging…, dev none). Empty string disables custom domain.
+ * - `certificateArn` — ACM cert ARN in us-east-1 (required for aliases)
+ * - `hostedZoneId` + `hostedZoneName` — optional Route53 alias records
  */
 const app = new cdk.App();
 
 const stage = resolveStage(app.node.tryGetContext("stage"));
 const prod = isProdStage(stage);
-const alertEmailRaw = app.node.tryGetContext("alertEmail");
-const alertEmail =
-  typeof alertEmailRaw === "string" && alertEmailRaw.trim().length > 0
-    ? alertEmailRaw.trim()
-    : undefined;
-
-if (prod && alertEmail === undefined) {
-  throw new Error(
-    'Prod stage requires -c alertEmail=you@example.com so alarms and the monthly budget can notify a human. Example: pnpm exec cdk synth -c stage=prod -c alertEmail=ops@example.com',
-  );
-}
-
-const runbookBaseUrlRaw = app.node.tryGetContext("runbookBaseUrl");
-const runbookBaseUrl =
-  typeof runbookBaseUrlRaw === "string" && runbookBaseUrlRaw.trim().length > 0
-    ? runbookBaseUrlRaw.trim().replace(/\/$/, "")
-    : undefined;
-
 const env: cdk.Environment = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: "us-east-1",
@@ -85,27 +71,40 @@ const api = new ApiStack(app, `TripPlan-Api-${stage}`, {
 api.addDependency(data);
 api.addDependency(foundation);
 
-const observability = new ObservabilityStack(
-  app,
-  `TripPlan-Observability-${stage}`,
-  {
-    env,
-    stage,
-    apiFunction: api.apiFunction,
-    httpApi: api.httpApi,
-    // deleteDlq: wire when trip-delete SQS lands (PR15)
-    alertEmail,
-    runbookBaseUrl,
-    description: `TripPlan observability (dashboard, alarms, budget, WAF) — ${stage}`,
-    terminationProtection: prod,
-    tags: {
-      Project: "TripPlan",
-      Stage: stage,
-      Stack: "Observability",
-    },
+const web = new WebStack(app, `TripPlan-Web-${stage}`, {
+  env,
+  stage,
+  httpApiUrl: api.httpApiUrl,
+  documentsBucketDomainName: data.documentsBucket.bucketRegionalDomainName,
+  // Raw context: undefined → stage default; "" → no custom domain.
+  domainName: contextString(app, "webDomain"),
+  certificateArn: contextString(app, "certificateArn"),
+  hostedZoneId: contextString(app, "hostedZoneId"),
+  hostedZoneName: contextString(app, "hostedZoneName"),
+  description: `TripPlan web (CloudFront SPA + /api proxy + CSP) — ${stage}`,
+  terminationProtection: prod,
+  tags: {
+    Project: "TripPlan",
+    Stage: stage,
+    Stack: "Web",
   },
-);
+});
 
-observability.addDependency(api);
+web.addDependency(api);
+web.addDependency(data);
 
 app.synth();
+
+/** Read optional string CDK context; missing key → undefined. */
+function contextString(app: cdk.App, key: string): string | undefined {
+  const value: unknown = app.node.tryGetContext(key);
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  throw new Error(
+    `CDK context "${key}" must be a string, got ${typeof value}`,
+  );
+}

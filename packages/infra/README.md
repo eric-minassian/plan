@@ -7,11 +7,11 @@ AWS CDK (v2) infrastructure for TripPlan. **All stacks deploy to `us-east-1`.**
 | Stack | ID pattern | Contents |
 |-------|------------|----------|
 | **FoundationStack** | `TripPlan-Foundation-{stage}` | CloudWatch log retention defaults; Secrets Manager placeholders (AeroDataBox, MapTiler server key) |
-| **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle); **PITR on prod** |
+| **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle) |
 | **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; routes `GET /api/v1/health` (public), `GET /api/v1/me` (owner JWT in-Lambda); env `TABLE_NAME` / `AUTH_ISSUER` / `AUTH_AUDIENCE` / `STAGE` / `PUBLIC_API_BASE_URL` (prod/staging). **Profile store is still in-memory** until Dynamo `UserRepository` lands — table R/W grant is preparatory. CORS: prod/staging SPA host only; localhost only on dev. |
-| **ObservabilityStack** | `TripPlan-Observability-{stage}` | CloudWatch dashboard + alarms (API 5xx rate w/ min volume, Lambda p95 latency, enrichment $ custom metric); **prod-only** AWS Budgets (Project+Stage tag filters); SNS alarm topic; WAFv2 REGIONAL WebACL (rate-based + managed CRS in count) on HTTP API `$default`; runbook paths / absolute links |
+| **WebStack** | `TripPlan-Web-{stage}` | Private SPA S3 bucket + CloudFront (OAC); default SPA (403/404 → `/index.html`); `/api/*` → API Gateway HTTP API; CSP response headers; runtime `/config.json`; optional custom domain + Route53 |
 
-**Not in this package yet:** WebStack (CloudFront SPA).  
+**Later:** ObservabilityStack.  
 **Never planned:** Cognito / AuthStack — owner auth is external OIDC ([eric-minassian/auth](https://github.com/eric-minassian/auth)).
 
 ## Requirements
@@ -37,27 +37,12 @@ pnpm synth
 
 # Explicit stage (allowed: dev | staging | prod — anything else fails synth)
 pnpm exec cdk synth -c stage=dev
-
-# Prod REQUIRES alertEmail (synth fails without it)
-pnpm exec cdk synth -c stage=prod -c alertEmail=ops@example.com
-
-# Optional: absolute runbook links on the CloudWatch dashboard text widgets
-pnpm exec cdk synth -c stage=dev \
-  -c runbookBaseUrl=https://github.com/org/tripplan/blob/main/packages/infra/runbooks
+pnpm exec cdk synth -c stage=prod
 
 # Deploy / destroy (all stacks in this app)
 pnpm exec cdk deploy --all -c stage=dev
 pnpm exec cdk destroy --all -c stage=dev
 ```
-
-### Prod deploy checklist
-
-1. `-c stage=prod -c alertEmail=…` (required — confirms SNS subscription + budget email).
-2. Confirm SNS email subscription in inbox (opt-in link) after first deploy.
-3. Billing console: activate cost allocation tags **`Project`** and **`Stage`** so the prod monthly budget filter works (otherwise tagged filter may under-count).
-4. Optional: `-c runbookBaseUrl=https://…/packages/infra/runbooks` so dashboard runbook links are clickable.
-5. After traffic: confirm `AWS/ApiGateway` graphs use `ApiId` + `Stage=$default`; WAF panels show Allowed/Blocked.
-6. PITR: `aws dynamodb describe-continuous-backups --table-name TripPlan-prod` → `ENABLED` (see [runbooks/delete-dlq.md](./runbooks/delete-dlq.md)).
 
 ## Stage behavior
 
@@ -68,74 +53,117 @@ pnpm exec cdk destroy --all -c stage=dev
 
 Context: `-c stage=…` (defaults to `dev` in `cdk.json`). Only `dev`, `staging`, and `prod` are accepted.
 
-## Observability
+## WebStack / CloudFront / domain
 
-### Dashboard
+Single public host topology: SPA + API under one origin so share cookies stay first-party.
 
-CloudWatch dashboard name: **`TripPlan-{stage}`**.
+| Path | Origin |
+|------|--------|
+| `/*` (default) | SPA S3 bucket via Origin Access Control |
+| `/config.json` | SPA S3, **cache disabled** (runtime config) |
+| `/api/*` | API Gateway HTTP API (`HttpApiUrl` from ApiStack) |
 
-Widgets:
+SPA routing: a **CloudFront Function** (viewer-request on the default behavior only) rewrites extension-less paths to `/index.html`. Distribution-level custom error responses are **not** used — they would also rewrite `/api/*` 403/404 into HTML. API status codes pass through unchanged (`GET /api/v1/does-not-exist` must stay JSON 404).
 
-- Runbook table (absolute links if `runbookBaseUrl` set; else monospaced repo paths — CloudWatch cannot resolve `./runbooks/…`)
-- Metric readiness note (enrichment EMF not live yet; future design signals)
-- API Lambda duration (p50/p95/max) with design **1.5s** + alarm **3s** annotations; invocations/errors/throttles
-- HTTP API Count / 5xx and Latency p95 (`ApiId` + `Stage=$default`)
-- **WAF** Allowed/Blocked (ALL + rate rule) and managed CRS CountedRequests
-- Enrichment estimated cost (empty until EMF); Delete DLQ (placeholder until worker)
-- Alarm status
+### Domain defaults (stage-aware)
 
-### Alarms (SNS topic `tripplan-alarms-{stage}`)
+| Stage | Default custom domain |
+|-------|------------------------|
+| `prod` | `plan.ericminassian.com` |
+| `staging` | `plan-staging.ericminassian.com` |
+| `dev` | none (CloudFront `*.cloudfront.net` only) |
 
-| Alarm | Condition |
-|-------|-----------|
-| `tripplan-{stage}-api-5xx-rate` | 5xx/Count > **1%** for 10m **only when Count ≥ 20** per 5m period |
-| `tripplan-{stage}-api-p95-latency` | Lambda Duration **p95 > 3000ms** for 10m (design target 1.5s is annotation-only) |
-| `tripplan-{stage}-enrichment-budget` | `TripPlan/EnrichmentEstimatedCostUsd` sum > **$25/day prod**, **$5/day** else — **not live until EMF** |
-| `tripplan-{stage}-delete-dlq-depth` | DLQ visible messages > 0 (**only if** `deleteDlq` wired) |
+Override or disable with context:
 
-- **Prod:** `alertEmail` is **required** at synth; ALARM + OK actions on 5xx/latency.
-- **Non-prod:** `alertEmail` optional; ALARM only (no OK actions) to cut noise.
-- Confirm the SNS email subscription after first deploy or pages go nowhere.
+```bash
+# Custom hostname
+pnpm exec cdk synth -c stage=prod -c webDomain=plan.ericminassian.com
 
-### AWS Budgets
+# Explicitly no custom domain (even on prod)
+pnpm exec cdk synth -c stage=prod -c webDomain=
+```
 
-**Prod only** — budget `tripplan-prod-monthly-cost` at **$100/month**.
+### ACM certificate (us-east-1)
 
-- **CostFilters:** `TagKeyValue` = `user:Project$TripPlan` and `user:Stage$prod` (AND). Activate these as **Cost Allocation Tags** in Billing or the filter under-counts.
-- Dev/staging intentionally have **no** monthly AWS Budget (avoids account-wide false positives when multiple stages share an account).
-- With `alertEmail`: notify at 80% actual and 100% forecasted.
-- Third-party enrich spend (AeroDataBox, MapTiler) is **outside** AWS Budgets — see [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md).
+CloudFront requires the cert in **us-east-1**. Pass an existing certificate ARN via context so **synth works without a real cert** (no aliases until ARN is set):
 
-### WAF
+```bash
+pnpm exec cdk synth -c stage=prod \
+  -c certificateArn=arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
 
-REGIONAL WebACL `tripplan-{stage}-api`:
+Without `certificateArn`, WebStack still synthesizes and deploys using the default CloudFront domain. If a default/custom `webDomain` is set without a cert, CDK emits a warning and skips aliases.
 
-- Default allow
-- **AWSManagedRulesCommonRuleSet** — **count** mode (observe before block)
-- Rate-based rule: **2000 requests / 5 minutes / IP** (`evaluationWindowSec: 300`) → block — **not** a substitute for app share/enrich limits
-- Associated to HTTP API stage `$default`
-- Export: `WebAclArn` for optional CloudFront attach later (CF needs a separate CLOUDFRONT-scoped ACL)
+Create/validate the cert (DNS or email) in ACM **us-east-1** before attaching it — this package does not mint certificates.
 
-### Runbooks
+### Route53 (optional)
 
-| Runbook | Path |
-|---------|------|
-| Share abuse | [runbooks/share-abuse.md](./runbooks/share-abuse.md) |
-| Enrichment budget | [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md) |
-| Delete DLQ (+ PITR verify) | [runbooks/delete-dlq.md](./runbooks/delete-dlq.md) |
+When both zone context keys are present **and** a custom domain + cert are active, WebStack creates A/AAAA aliases:
 
-Dashboard: pass `-c runbookBaseUrl=…/packages/infra/runbooks` for clickable links.
+```bash
+pnpm exec cdk deploy --all -c stage=prod \
+  -c certificateArn=arn:aws:acm:us-east-1:…:certificate/… \
+  -c hostedZoneId=Z0123456789ABC \
+  -c hostedZoneName=ericminassian.com
+```
 
-### Custom metrics (app)
+If the zone is omitted, point DNS at the `DistributionDomainName` output manually.
 
-Namespace **`TripPlan`** (constant `TRIPPLAN_METRIC_NAMESPACE`):
+### CSP (response headers policy)
 
-| Metric | Dimensions | When |
-|--------|------------|------|
-| `EnrichmentEstimatedCostUsd` | `Stage` | **Follow-up:** emit via EMF on enrich attempts (sum = estimated USD). Budget alarm is scaffolding until then. |
-| `DeleteDlqDepthPlaceholder` | `Stage` | Dashboard only until real SQS DLQ exists |
+Applied to the SPA default behavior:
 
-**Also not alarmed yet** (need app EMF): enrichment outcome fail rate, share 401/403/410 spikes, upload confirm rate, business counters.
+```
+default-src 'self';
+script-src 'self';
+style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob: https://*.maptiler.com;
+connect-src 'self' https://auth.ericminassian.com https://*.maptiler.com https://<docs-bucket>.s3.us-east-1.amazonaws.com;
+worker-src 'self' blob:;
+frame-src 'none';
+base-uri 'self';
+form-action 'self';
+```
+
+Docs bucket host is injected from DataStack (`bucketRegionalDomainName`).
+
+### Runtime `config.json`
+
+WebStack deploys `/config.json` to the SPA bucket (BucketDeployment, `prune: false` so CI asset sync is not wiped):
+
+```json
+{
+  "authIssuer": "https://auth.ericminassian.com",
+  "authClientId": "plan",
+  "mapTilerApiKey": ""
+}
+```
+
+Fill `mapTilerApiKey` (referrer-restricted browser key) after deploy (or a post-sync write). SPA static files (`index.html`, assets) are **not** deployed by CDK — build `@tripplan/web` and sync `dist/` to `SpaBucketName`, then invalidate the distribution.
+
+`/config.json` is also served with CloudFront **CACHING_DISABLED** and S3 `Cache-Control: no-cache, must-revalidate` so key rotations are not stuck at the edge.
+
+### Deploy SPA assets
+
+Always **exclude** `config.json` from `s3 sync --delete` so WebStack/ops-managed runtime config (MapTiler browser key) is not overwritten by `public/config.json` from the build:
+
+```bash
+pnpm --filter @tripplan/web build
+
+aws s3 sync packages/web/dist "s3://${SPA_BUCKET}/" \
+  --delete \
+  --exclude config.json \
+  --exclude 'config.json/*'
+
+# Optional: set MapTiler key after first deploy (or when rotating)
+# aws s3 cp config.prod.json "s3://${SPA_BUCKET}/config.json" \
+#   --content-type application/json \
+#   --cache-control 'no-cache, must-revalidate'
+
+aws cloudfront create-invalidation \
+  --distribution-id "${DIST_ID}" \
+  --paths '/*'
+```
 
 ## Outputs
 
@@ -147,10 +175,9 @@ Namespace **`TripPlan`** (constant `TRIPPLAN_METRIC_NAMESPACE`):
 | `DefaultLogRetentionDays` | Stage default log retention (exported) |
 | `HttpApiUrl` | HTTP API base URL |
 | `ApiFunctionName` | API Lambda function name |
-| `DashboardName` | CloudWatch dashboard name |
-| `AlarmTopicArn` | SNS topic for alarms |
-| `WebAclArn` | WAFv2 WebACL ARN |
-| `MonthlyBudgetUsd` | Monthly AWS Budgets limit (**prod only**) |
+| `SpaBucketName` | SPA static assets bucket |
+| `DistributionId` / `DistributionDomainName` | CloudFront distribution |
+| `WebUrl` | Public web base URL (custom domain when cert configured) |
 
 ### Secrets (placeholders)
 
@@ -178,24 +205,13 @@ aws secretsmanager put-secret-value \
 - **GSI3** — Sessions by trip: `GSI3PK`/`GSI3SK`, KEYS_ONLY
 - **GSI4** — Sessions by share: `GSI4PK`/`GSI4SK`, KEYS_ONLY
 
-### PITR (prod)
-
-Point-in-time recovery is **on for prod only**. Verify:
-
-```bash
-aws dynamodb describe-continuous-backups \
-  --region us-east-1 \
-  --table-name TripPlan-prod \
-  --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription'
-```
-
-See [runbooks/delete-dlq.md](./runbooks/delete-dlq.md) for restore notes.
-
 ## S3 documents bucket
 
 - Encryption: SSE-S3
 - Block all public access; SSL enforced
-- CORS (stage-driven list): `https://plan.ericminassian.com`, `http://localhost:5173` (GET/PUT/HEAD); staging host can be added in `docsCorsOrigins` when available
+- CORS (stage-driven via shared `docsCorsOrigins` in `hosts.ts`, GET/PUT/HEAD):
+  - **prod / dev:** `https://plan.ericminassian.com`, `http://localhost:5173`
+  - **staging:** `https://plan-staging.ericminassian.com`, prod SPA, Vite local
 - Object keys (design / PR14): `trips/{tripId}/items/{itemId}/{attachmentId}` — **no** `pending/` prefix
 - Lifecycle:
   - abort incomplete multipart after 7 days
