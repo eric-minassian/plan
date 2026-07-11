@@ -1,13 +1,11 @@
 import {
   CreateItineraryItem,
   CreateTrip,
-  FlightEnrichmentResponse,
   ItineraryItem,
   Trip,
   UpdateItineraryItem,
   type CreateItineraryItem as CreateItineraryItemInput,
   type CreateTrip as CreateTripInput,
-  type FlightEnrichmentResponse as FlightEnrichmentResponseType,
   type ItineraryItem as ItineraryItemType,
   type Trip as TripType,
   type UpdateItineraryItem as UpdateItineraryItemInput,
@@ -128,22 +126,6 @@ export function decodeItemResponse(
       status,
       undefined,
       `Invalid item response: ${schemaIssues(decoded.left)}`,
-    );
-  }
-  return decoded.right;
-}
-
-/** Decode flight enrichment DTO (found / cancelled / not_found). */
-export function decodeFlightEnrichmentResponse(
-  json: unknown,
-  status: number,
-): FlightEnrichmentResponseType {
-  const decoded = S.decodeUnknownEither(FlightEnrichmentResponse)(json);
-  if (Either.isLeft(decoded)) {
-    throw new ApiClientError(
-      status,
-      undefined,
-      `Invalid flight enrichment response: ${schemaIssues(decoded.left)}`,
     );
   }
   return decoded.right;

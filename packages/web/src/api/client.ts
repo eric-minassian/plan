@@ -2,14 +2,11 @@ import { AuthError, type AuthClient } from "@ericminassian/auth/client";
 import type {
   CreateItineraryItem,
   CreateTrip,
-  EnrichFlightRequest,
-  FlightEnrichmentResponse,
   ItineraryItem,
   Trip,
   UpdateItineraryItem,
 } from "@tripplan/domain";
 import {
-  decodeFlightEnrichmentResponse,
   decodeItemResponse,
   decodeTripDetailResponse,
   decodeTripListResponse,
@@ -48,7 +45,6 @@ export interface TripPlanApi {
     input: UpdateItineraryItem,
   ): Promise<ItineraryItem>;
   deleteItem(tripId: string, itemId: string): Promise<void>;
-  enrichFlight(input: EnrichFlightRequest): Promise<FlightEnrichmentResponse>;
 }
 
 export interface TripPlanApiOptions {
@@ -141,17 +137,6 @@ export function createTripPlanApi(
         `/api/v1/trips/${encodeURIComponent(tripId)}/items/${encodeURIComponent(itemId)}`,
         { method: "DELETE" },
         options,
-      );
-    },
-    enrichFlight(input) {
-      return request(
-        "/api/v1/enrich/flight",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
-        },
-        decodeFlightEnrichmentResponse,
       );
     },
   };

@@ -7,15 +7,12 @@ import type {
 import { makeEricminassianOwnerAuth } from "./auth/ericminassian-owner-auth.js";
 import type { OwnerAuthService } from "./auth/owner-auth.js";
 import { loadConfig, type ApiConfig } from "./config.js";
-import type { FlightProvider } from "./enrichment/flight-provider.js";
-import type { EnrichmentGuardsService } from "./enrichment/guards.js";
 import { fromApiGatewayEvent, toApiGatewayResult } from "./http/apigw.js";
 import type { HttpRequest } from "./http/types.js";
 import { consoleLogger, type Logger } from "./logging/logger.js";
 import {
   buildRoutes,
   handleRequestAsync,
-  makeEnrichmentRuntime,
   type RouterDeps,
 } from "./router.js";
 import { makeDynamoTripRepo } from "./repos/dynamo-trip-repo.js";
@@ -34,8 +31,6 @@ export interface HandlerOptions {
   readonly userRepo?: UserRepository;
   readonly tripRepo?: TripRepository;
   readonly logger?: Logger;
-  readonly flightProvider?: FlightProvider;
-  readonly enrichmentGuards?: EnrichmentGuardsService;
 }
 
 /**
@@ -59,11 +54,6 @@ export function createHandler(
       : makeInMemoryTripRepo());
 
   const routeTable = buildRoutes(config);
-  const enrichmentRuntime = makeEnrichmentRuntime(config);
-  const flightProvider =
-    options.flightProvider ?? enrichmentRuntime.flightProvider;
-  const enrichmentGuards =
-    options.enrichmentGuards ?? enrichmentRuntime.enrichmentGuards;
 
   // Mutable request holder so OwnerAuth can read the active request for DPoP.
   let currentRequest: HttpRequest | undefined;
@@ -97,8 +87,6 @@ export function createHandler(
       tripRepo,
       logger,
       routes: routeTable,
-      flightProvider,
-      enrichmentGuards,
     };
 
     try {

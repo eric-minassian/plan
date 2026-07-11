@@ -33,19 +33,15 @@ function emptyRepos() {
 }
 
 describe("authz matrix", () => {
-  it("exposes health as public and me/trips/enrich as owner", () => {
+  it("exposes health as public and me/trips as owner", () => {
     const health = routes.find((r) => r.path === "/api/v1/health");
     const me = routes.find((r) => r.path === "/api/v1/me");
     const listTrips = routes.find(
       (r) => r.method === "GET" && r.path === "/api/v1/trips",
     );
-    const enrichFlight = routes.find(
-      (r) => r.method === "POST" && r.path === "/api/v1/enrich/flight",
-    );
     expect(health?.authClass).toBe("public");
     expect(me?.authClass).toBe("owner");
     expect(listTrips?.authClass).toBe("owner");
-    expect(enrichFlight?.authClass).toBe("owner");
   });
 
   it("GET /api/v1/health succeeds without owner auth", async () => {
