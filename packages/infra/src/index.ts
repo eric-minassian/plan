@@ -1,9 +1,10 @@
 /**
  * @tripplan/infra — AWS CDK stacks for TripPlan (us-east-1).
  *
- * Current: FoundationStack + DataStack.
- * Later: ApiStack, WebStack, ObservabilityStack (no Cognito/AuthStack).
+ * Current: FoundationStack + DataStack + ApiStack.
+ * Later: WebStack, ObservabilityStack (no Cognito/AuthStack).
  */
+export { ApiStack, type ApiStackProps } from "./stacks/api-stack.js";
 export { DataStack, type DataStackProps } from "./stacks/data-stack.js";
 export {
   FoundationStack,

@@ -1,0 +1,195 @@
+import { Effect } from "effect";
+import { describe, expect, it } from "vitest";
+import { makeMockOwnerAuth, mockPrincipal } from "./auth/mock-owner-auth.js";
+import {
+  makeShareAuthStub,
+  SHARE_COOKIE_NAME,
+} from "./auth/share-auth.js";
+import { silentLogger } from "./logging/logger.js";
+import { makeInMemoryUserRepo } from "./repos/user-repo.js";
+import { handleRequest, routes } from "./router.js";
+import type { HttpRequest } from "./http/types.js";
+
+function baseRequest(partial: Partial<HttpRequest> & Pick<HttpRequest, "method" | "path">): HttpRequest {
+  return {
+    method: partial.method,
+    path: partial.path,
+    url: partial.url ?? `https://plan.ericminassian.com${partial.path}`,
+    headers: partial.headers ?? {},
+    query: partial.query ?? {},
+    cookies: partial.cookies ?? {},
+    body: partial.body,
+    requestId: partial.requestId ?? "test-request-id",
+  };
+}
+
+describe("authz matrix", () => {
+  it("exposes health as public and me as owner", () => {
+    const health = routes.find((r) => r.path === "/api/v1/health");
+    const me = routes.find((r) => r.path === "/api/v1/me");
+    expect(health?.authClass).toBe("public");
+    expect(me?.authClass).toBe("owner");
+  });
+
+  it("GET /api/v1/health succeeds without owner auth", async () => {
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "GET", path: "/api/v1/health" }), {
+        ownerAuth: makeMockOwnerAuth(null),
+        userRepo: makeInMemoryUserRepo(),
+        logger: silentLogger,
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body ?? "{}")).toEqual({ status: "ok" });
+  });
+
+  it("GET /api/v1/me returns 401 without principal", async () => {
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
+        ownerAuth: makeMockOwnerAuth(null),
+        userRepo: makeInMemoryUserRepo(),
+        logger: silentLogger,
+      }),
+    );
+    expect(response.status).toBe(401);
+    const body = JSON.parse(response.body ?? "{}") as { type: string; requestId: string };
+    expect(body.type).toBe("Unauthorized");
+    expect(body.requestId).toBe("test-request-id");
+  });
+
+  it("GET /api/v1/me upserts profile from mock principal", async () => {
+    const principal = mockPrincipal({
+      sub: "user-123",
+      nickname: "Ada",
+      iss: "https://auth.ericminassian.com",
+    });
+    const userRepo = makeInMemoryUserRepo();
+
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
+        ownerAuth: makeMockOwnerAuth(principal),
+        userRepo,
+        logger: silentLogger,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = JSON.parse(response.body ?? "{}") as {
+      userId: string;
+      displayName: string;
+      iss: string;
+      createdAt: string;
+    };
+    expect(body.userId).toBe("user-123");
+    expect(body.displayName).toBe("Ada");
+    expect(body.iss).toBe("https://auth.ericminassian.com");
+    expect(body.createdAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/,
+    );
+
+    // Second call preserves createdAt and keeps displayName.
+    const again = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
+        ownerAuth: makeMockOwnerAuth(principal),
+        userRepo,
+        logger: silentLogger,
+      }),
+    );
+    const body2 = JSON.parse(again.body ?? "{}") as { createdAt: string };
+    expect(body2.createdAt).toBe(body.createdAt);
+  });
+
+  it("GET /api/v1/me uses sub as displayName when nickname absent", async () => {
+    const principal = mockPrincipal({ sub: "user-no-nick" });
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
+        ownerAuth: makeMockOwnerAuth(principal),
+        userRepo: makeInMemoryUserRepo(),
+        logger: silentLogger,
+      }),
+    );
+    const body = JSON.parse(response.body ?? "{}") as { displayName: string };
+    expect(body.displayName).toBe("user-no-nick");
+  });
+
+  it("unknown route returns 404 ApiErrorBody", async () => {
+    const response = await Effect.runPromise(
+      handleRequest(
+        baseRequest({ method: "GET", path: "/api/v1/trips" }),
+        {
+          ownerAuth: makeMockOwnerAuth(null),
+          userRepo: makeInMemoryUserRepo(),
+          logger: silentLogger,
+        },
+      ),
+    );
+    expect(response.status).toBe(404);
+    const body = JSON.parse(response.body ?? "{}") as { type: string };
+    expect(body.type).toBe("NotFound");
+  });
+
+  it("share auth stub rejects missing cookie", async () => {
+    const share = makeShareAuthStub(() => undefined);
+    const result = await Effect.runPromise(
+      Effect.either(share.requireShare()),
+    );
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left.type).toBe("Unauthorized");
+    }
+  });
+
+  it("share auth stub rejects cookie until revalidation lands", async () => {
+    const share = makeShareAuthStub(() => "session-abc");
+    const result = await Effect.runPromise(
+      Effect.either(share.requireShare()),
+    );
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left.message).toMatch(/not implemented/i);
+    }
+  });
+
+  it("share cookie name is tripplan_share", () => {
+    expect(SHARE_COOKIE_NAME).toBe("tripplan_share");
+  });
+
+  it("wrong method on known path returns 405 with Allow", async () => {
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "POST", path: "/api/v1/me" }), {
+        ownerAuth: makeMockOwnerAuth(null),
+        userRepo: makeInMemoryUserRepo(),
+        logger: silentLogger,
+      }),
+    );
+    expect(response.status).toBe(405);
+    expect(response.headers?.allow).toBe("GET");
+    const body = JSON.parse(response.body ?? "{}") as {
+      type: string;
+      retryable: boolean;
+      message: string;
+    };
+    expect(body.type).toBe("MethodNotAllowed");
+    expect(body.retryable).toBe(false);
+    expect(body.message).toBe("Method not allowed");
+  });
+
+  it("requireOwner is invoked once for owner routes", async () => {
+    let calls = 0;
+    const principal = mockPrincipal({ sub: "once" });
+    const response = await Effect.runPromise(
+      handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
+        ownerAuth: {
+          requireOwner: () => {
+            calls += 1;
+            return Effect.succeed(principal);
+          },
+        },
+        userRepo: makeInMemoryUserRepo(),
+        logger: silentLogger,
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toBe(1);
+  });
+});

@@ -1,0 +1,128 @@
+openapi: 3.1.0
+# Canonical OpenAPI for implemented routes — do not duplicate in openapi.json/TS.
+info:
+  title: TripPlan API
+  version: 0.1.0
+  description: |
+    TripPlan HTTP API (skeleton). Owner auth is external OIDC at
+    auth.ericminassian.com via in-Lambda verification (no Cognito).
+    Share session routes are reserved for a later PR.
+servers:
+  - url: https://plan.ericminassian.com
+    description: Production (CloudFront → API Gateway)
+  - url: http://localhost:3000
+    description: Local development
+tags:
+  - name: Public
+    description: No JWT required
+  - name: Owner
+    description: OIDC access token (Bearer / DPoP auto)
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      tags: [Public]
+      summary: Liveness check
+      description: Public health endpoint; no authentication.
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+  /api/v1/me:
+    get:
+      operationId: getMe
+      tags: [Owner]
+      summary: Current owner profile
+      description: |
+        Requires a verified owner access token. Upserts the user profile from
+        JWT claims (`userId` = `sub`, `displayName` from `nickname` when present,
+        stores `iss`). Never requires email.
+      security:
+        - ownerBearer: []
+      responses:
+        "200":
+          description: Profile (created or existing)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Missing or invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBody"
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+              description: RFC 6750 / RFC 9449 challenge when provided by the verifier
+components:
+  securitySchemes:
+    ownerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        OIDC access token from auth.ericminassian.com (audience `plan`).
+        DPoP-bound tokens must include a valid DPoP proof (mode auto).
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required: [userId, iss, displayName, createdAt]
+      properties:
+        userId:
+          type: string
+          description: OIDC subject (`sub`)
+        iss:
+          type: string
+          description: Token issuer
+        displayName:
+          type: string
+          description: From nickname claim when present; otherwise previous or sub
+        createdAt:
+          type: string
+          description: Canonical Instant (ISO-8601 second precision with zone)
+          examples:
+            - "2026-07-10T12:00:00Z"
+    ApiErrorBody:
+      type: object
+      additionalProperties: false
+      required: [type, message, retryable, requestId]
+      properties:
+        type:
+          type: string
+          enum:
+            - NotFound
+            - Forbidden
+            - Unauthorized
+            - ValidationError
+            - MethodNotAllowed
+            - Conflict
+            - PayloadTooLarge
+            - RateLimited
+            - UpstreamUnavailable
+            - AmbiguousEnrichment
+            - InternalError
+        message:
+          type: string
+        details: {}
+        retryable:
+          type: boolean
+        requestId:
+          type: string

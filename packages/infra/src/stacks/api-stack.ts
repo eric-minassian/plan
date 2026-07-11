@@ -1,0 +1,211 @@
+import * as cdk from "aws-cdk-lib";
+import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
+import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import type * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import {
+  NodejsFunction,
+  OutputFormat,
+} from "aws-cdk-lib/aws-lambda-nodejs";
+import * as logs from "aws-cdk-lib/aws-logs";
+import type { Construct } from "constructs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { isProdStage, type Stage } from "../stage.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export interface ApiStackProps extends cdk.StackProps {
+  readonly stage: Stage;
+  /** Single-table DynamoDB from DataStack. */
+  readonly table: dynamodb.ITable;
+  /** Optional log retention from FoundationStack (defaults by stage). */
+  readonly logRetention?: logs.RetentionDays;
+}
+
+/**
+ * API plane: Lambda (Node ARM64) + HTTP API.
+ * JWT is verified in-Lambda via `@ericminassian/auth` — no Cognito, no
+ * API Gateway JWT authorizer on owner routes.
+ *
+ * Profile storage: Lambda currently uses an in-memory UserRepository (skeleton).
+ * `TABLE_NAME` + Dynamo R/W grants prepare for a Dynamo-backed profile upsert
+ * (`USER#sub` / `PROFILE`); until then cold starts lose profile state.
+ */
+export class ApiStack extends cdk.Stack {
+  readonly httpApi: apigwv2.HttpApi;
+  readonly apiFunction: lambda.Function;
+  readonly httpApiUrl: string;
+
+  constructor(scope: Construct, id: string, props: ApiStackProps) {
+    super(scope, id, props);
+
+    const { stage, table } = props;
+    const prod = isProdStage(stage);
+    const logRetention =
+      props.logRetention ??
+      (prod ? logs.RetentionDays.ONE_YEAR : logs.RetentionDays.ONE_MONTH);
+
+    // packages/api/src/handler.ts relative to this file:
+    // stacks/ -> src/ -> infra/ -> packages/ -> api/src/handler.ts
+    const apiHandlerEntry = path.join(
+      __dirname,
+      "..",
+      "..",
+      "..",
+      "api",
+      "src",
+      "handler.ts",
+    );
+
+    const publicApiBaseUrl = publicApiBaseUrlForStage(stage);
+
+    this.apiFunction = new NodejsFunction(this, "ApiHandler", {
+      functionName: `tripplan-api-${stage}`,
+      entry: apiHandlerEntry,
+      handler: "handler",
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(29),
+      tracing: lambda.Tracing.ACTIVE,
+      logRetention,
+      environment: {
+        TABLE_NAME: table.tableName,
+        AUTH_ISSUER: "https://auth.ericminassian.com",
+        AUTH_AUDIENCE: "plan",
+        STAGE: stage,
+        // Trusted origin for DPoP htu (not client X-Forwarded-Host).
+        ...(publicApiBaseUrl !== undefined
+          ? { PUBLIC_API_BASE_URL: publicApiBaseUrl }
+          : {}),
+        NODE_OPTIONS: "--enable-source-maps",
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: "node22",
+        format: OutputFormat.ESM,
+        mainFields: ["module", "main"],
+        banner:
+          "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+        // Keep Effect + auth SDK in the bundle so Lambda has no node_modules layout issues.
+        externalModules: ["@aws-sdk/*"],
+      },
+      description: `TripPlan HTTP API (${stage}) — health + me skeleton (in-memory profile store)`,
+    });
+
+    // R/W for future Dynamo profile/trip repos; profile upsert is still in-memory.
+    table.grantReadWriteData(this.apiFunction);
+
+    this.httpApi = new apigwv2.HttpApi(this, "HttpApi", {
+      apiName: `tripplan-${stage}`,
+      description: `TripPlan HTTP API (${stage}). Owner JWT verified in Lambda; no Cognito.`,
+      corsPreflight: {
+        allowHeaders: [
+          "Authorization",
+          "Content-Type",
+          "DPoP",
+          "If-Match",
+          "Idempotency-Key",
+          "X-Request-Id",
+        ],
+        allowMethods: [
+          apigwv2.CorsHttpMethod.GET,
+          apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PUT,
+          apigwv2.CorsHttpMethod.PATCH,
+          apigwv2.CorsHttpMethod.DELETE,
+          apigwv2.CorsHttpMethod.OPTIONS,
+        ],
+        allowOrigins: corsOrigins(stage),
+        maxAge: cdk.Duration.hours(1),
+        allowCredentials: true,
+      },
+      // No default authorizer — Public/Share/Owner matrix is enforced in Lambda.
+    });
+
+    const integration = new integrations.HttpLambdaIntegration(
+      "ApiIntegration",
+      this.apiFunction,
+      {
+        payloadFormatVersion: apigwv2.PayloadFormatVersion.VERSION_2_0,
+      },
+    );
+
+    // Public — no JWT authorizer at the gateway
+    this.httpApi.addRoutes({
+      path: "/api/v1/health",
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+    });
+
+    // Owner — JWT verified in Lambda (OIDC), not Cognito / APIGW JWT authorizer
+    this.httpApi.addRoutes({
+      path: "/api/v1/me",
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+    });
+
+    // Catch-all under /api/v1/* so future routes (trips, share, enrich) hit the
+    // same Lambda without a blanket JWT policy. Auth class is decided in-process.
+    this.httpApi.addRoutes({
+      path: "/api/v1/{proxy+}",
+      methods: [
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.PUT,
+        apigwv2.HttpMethod.PATCH,
+        apigwv2.HttpMethod.DELETE,
+      ],
+      integration,
+    });
+
+    this.httpApiUrl = this.httpApi.apiEndpoint;
+
+    new cdk.CfnOutput(this, "HttpApiUrl", {
+      value: this.httpApiUrl,
+      description: "HTTP API base URL (no trailing slash)",
+      exportName: `tripplan-${stage}-http-api-url`,
+    });
+
+    new cdk.CfnOutput(this, "ApiFunctionName", {
+      value: this.apiFunction.functionName,
+      description: "API Lambda function name",
+      exportName: `tripplan-${stage}-api-function-name`,
+    });
+  }
+}
+
+/**
+ * CORS: prod/staging only SPA hosts (credentialed share cookies must not be
+ * readable from arbitrary localhost pages against prod). Dev keeps Vite local.
+ */
+function corsOrigins(stage: Stage): string[] {
+  const productionSpa = "https://plan.ericminassian.com";
+  const localVite = "http://localhost:5173";
+  switch (stage) {
+    case "prod":
+      return [productionSpa];
+    case "staging":
+      // Add a dedicated staging SPA host when it exists.
+      return [productionSpa];
+    case "dev":
+      return [productionSpa, localVite];
+  }
+}
+
+/**
+ * Trusted public origin for DPoP `htu` reconstruction.
+ * Dev leaves unset so Lambda uses API Gateway `Host` (execute-api URL).
+ */
+function publicApiBaseUrlForStage(stage: Stage): string | undefined {
+  switch (stage) {
+    case "prod":
+    case "staging":
+      return "https://plan.ericminassian.com";
+    case "dev":
+      return undefined;
+  }
+}
