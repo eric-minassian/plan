@@ -19,23 +19,49 @@ export interface ApiConfig {
    * Env: `TRIPS_DELETE_ENABLED` (`true`/`false`); default enabled.
    */
   readonly tripsDeleteEnabled: boolean;
+  /**
+   * Allowed browser Origins for POST /share/session.
+   * Derived from PUBLIC_API_BASE_URL plus common Vite dev origins.
+   */
+  readonly shareAllowedOrigins: readonly string[];
 }
 
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): ApiConfig {
   const rawBase = env.PUBLIC_API_BASE_URL?.trim();
+  const publicApiBaseUrl =
+    rawBase !== undefined && rawBase.length > 0
+      ? rawBase.replace(/\/$/, "")
+      : undefined;
   return {
     stage: env.STAGE ?? "dev",
     tableName: env.TABLE_NAME,
     authIssuer: env.AUTH_ISSUER ?? "https://auth.ericminassian.com",
     authAudience: env.AUTH_AUDIENCE ?? "plan",
-    publicApiBaseUrl:
-      rawBase !== undefined && rawBase.length > 0
-        ? rawBase.replace(/\/$/, "")
-        : undefined,
+    publicApiBaseUrl,
     tripsDeleteEnabled: parseBoolFlag(env.TRIPS_DELETE_ENABLED, true),
+    shareAllowedOrigins: buildShareAllowedOrigins(publicApiBaseUrl, env.STAGE),
   };
+}
+
+function buildShareAllowedOrigins(
+  publicApiBaseUrl: string | undefined,
+  stage: string | undefined,
+): readonly string[] {
+  const origins = new Set<string>();
+  if (publicApiBaseUrl !== undefined) {
+    origins.add(publicApiBaseUrl);
+  }
+  // Dogfood SPA hosts
+  origins.add("https://plan.ericminassian.com");
+  if (stage !== "prod") {
+    origins.add("http://localhost:5173");
+    origins.add("http://127.0.0.1:5173");
+    origins.add("http://localhost:4173");
+    origins.add("http://127.0.0.1:4173");
+  }
+  return [...origins];
 }
 
 function parseBoolFlag(

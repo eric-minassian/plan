@@ -37,6 +37,7 @@ function request(partial: Partial<HttpRequest> = {}): HttpRequest {
     cookies: partial.cookies ?? {},
     body: partial.body,
     requestId: partial.requestId ?? "req-auth-1",
+    clientIp: partial.clientIp ?? "127.0.0.1",
   };
 }
 

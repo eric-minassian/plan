@@ -62,6 +62,19 @@ export class AppError extends Data.TaggedError("AppError")<{
     return new AppError({ type: ErrorCode.Conflict, message, details });
   }
 
+  /** Trip deleted/deleting — share viewers get 410 Gone. */
+  static gone(message = "Trip is no longer available"): AppError {
+    return new AppError({ type: ErrorCode.Gone, message });
+  }
+
+  static rateLimited(message = "Too many requests"): AppError {
+    return new AppError({
+      type: ErrorCode.RateLimited,
+      message,
+      retryable: true,
+    });
+  }
+
   /**
    * Client-safe internal error. Message is always {@link INTERNAL_ERROR_MESSAGE};
    * log the real cause separately with {@link logInternalCause}.
