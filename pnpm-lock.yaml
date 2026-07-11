@@ -153,7 +153,7 @@ importers:
   packages/web:
     dependencies:
       '@eric-minassian/design':
-        specifier: github:eric-minassian/design
+        specifier: github:eric-minassian/design#5f47bdb925eabb588e718a25a747bdb0e8697bbf
         version: https://codeload.github.com/eric-minassian/design/tar.gz/5f47bdb925eabb588e718a25a747bdb0e8697bbf(@date-fns/tz@1.5.0)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)(tailwindcss@4.3.2)(typescript@5.7.3)
       '@ericminassian/auth':
         specifier: ^1.1.0
@@ -5577,7 +5577,7 @@ snapshots:
       immer: 11.1.11
       redux: 5.0.1
       redux-thunk: 3.1.0(redux@5.0.1)
-      reselect: 5.1.1
+      reselect: 5.2.0
     optionalDependencies:
       react: 19.2.7
       react-redux: 9.3.0(@types/react@19.2.17)(react@19.2.7)(redux@5.0.1)

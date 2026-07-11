@@ -549,7 +549,7 @@ export function FlightForm(props: FlightFormProps) {
                 />
               </Field>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 sm:items-end">
               <Field>
                 <FieldLabel htmlFor="lookup-hint">From hint (IATA)</FieldLabel>
                 <Input
@@ -564,29 +564,23 @@ export function FlightForm(props: FlightFormProps) {
                   placeholder="SFO"
                 />
               </Field>
-              <Field className="justify-end">
-                <FieldLabel className="opacity-0" htmlFor="lookup-btn">
-                  Lookup
-                </FieldLabel>
-                <Button
-                  id="lookup-btn"
-                  type="button"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => {
-                    void onLookup();
-                  }}
-                >
-                  {lookupBusy ? (
-                    <>
-                      <Spinner data-icon="inline-start" />
-                      Looking up…
-                    </>
-                  ) : (
-                    "Lookup"
-                  )}
-                </Button>
-              </Field>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  void onLookup();
+                }}
+              >
+                {lookupBusy ? (
+                  <>
+                    <Spinner data-icon="inline-start" />
+                    Looking up…
+                  </>
+                ) : (
+                  "Lookup"
+                )}
+              </Button>
             </div>
           </FieldGroup>
         </FieldSet>
