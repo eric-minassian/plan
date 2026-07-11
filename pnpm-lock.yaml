@@ -154,7 +154,7 @@ importers:
     dependencies:
       '@eric-minassian/design':
         specifier: github:eric-minassian/design
-        version: https://codeload.github.com/eric-minassian/design/tar.gz/36894e70aa59d0157bc6cfaabd1e437ec17c15ad(@date-fns/tz@1.5.0)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)(tailwindcss@4.3.2)(typescript@5.7.3)
+        version: https://codeload.github.com/eric-minassian/design/tar.gz/5f47bdb925eabb588e718a25a747bdb0e8697bbf(@date-fns/tz@1.5.0)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)(tailwindcss@4.3.2)(typescript@5.7.3)
       '@ericminassian/auth':
         specifier: ^1.1.0
         version: 1.1.0(express@5.2.1)(hono@4.12.29)(react@19.2.7)
@@ -529,8 +529,8 @@ packages:
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
 
-  '@eric-minassian/design@https://codeload.github.com/eric-minassian/design/tar.gz/36894e70aa59d0157bc6cfaabd1e437ec17c15ad':
-    resolution: {tarball: https://codeload.github.com/eric-minassian/design/tar.gz/36894e70aa59d0157bc6cfaabd1e437ec17c15ad}
+  '@eric-minassian/design@https://codeload.github.com/eric-minassian/design/tar.gz/5f47bdb925eabb588e718a25a747bdb0e8697bbf':
+    resolution: {tarball: https://codeload.github.com/eric-minassian/design/tar.gz/5f47bdb925eabb588e718a25a747bdb0e8697bbf}
     version: 0.1.0
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
@@ -4483,7 +4483,7 @@ snapshots:
 
   '@dotenvx/primitives@0.8.0': {}
 
-  '@eric-minassian/design@https://codeload.github.com/eric-minassian/design/tar.gz/36894e70aa59d0157bc6cfaabd1e437ec17c15ad(@date-fns/tz@1.5.0)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)(tailwindcss@4.3.2)(typescript@5.7.3)':
+  '@eric-minassian/design@https://codeload.github.com/eric-minassian/design/tar.gz/5f47bdb925eabb588e718a25a747bdb0e8697bbf(@date-fns/tz@1.5.0)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)(tailwindcss@4.3.2)(typescript@5.7.3)':
     dependencies:
       '@base-ui/react': 1.6.0(@date-fns/tz@1.5.0)(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@fontsource-variable/geist': 5.2.9
