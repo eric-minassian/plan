@@ -114,8 +114,7 @@ export type ResolvedItemPatchFields = {
   readonly endLocation?: ItineraryItem["endLocation"];
   readonly notes?: string;
   readonly confirmationCode?: string;
-  /** Enrichment meta to set, or `null` to REMOVE stored enrichment. */
-  readonly enrichment?: ItineraryItem["enrichment"] | null;
+  readonly enrichment?: ItineraryItem["enrichment"];
   readonly details?: ItineraryItem["details"];
 };
 
@@ -138,7 +137,7 @@ export function resolveItemPatchFields(
     endLocation?: ItineraryItem["endLocation"];
     notes?: string;
     confirmationCode?: string;
-    enrichment?: ItineraryItem["enrichment"] | null;
+    enrichment?: ItineraryItem["enrichment"];
     details?: ItineraryItem["details"];
   } = {};
 
@@ -173,9 +172,7 @@ export function resolveItemPatchFields(
   if (patch.confirmationCode !== undefined) {
     out.confirmationCode = patch.confirmationCode;
   }
-  if (patch.enrichment === null) {
-    out.enrichment = null;
-  } else if (patch.enrichment !== undefined) {
+  if (patch.enrichment !== undefined) {
     out.enrichment = patch.enrichment;
   }
   if (patch.details !== undefined) {
@@ -259,9 +256,7 @@ export function buildItemPatchUpdateExpression(
     sets.push("confirmationCode = :confirmationCode");
     values[":confirmationCode"] = fields.confirmationCode;
   }
-  if (fields.enrichment === null) {
-    removes.push("enrichment");
-  } else if (fields.enrichment !== undefined) {
+  if (fields.enrichment !== undefined) {
     sets.push("enrichment = :enrichment");
     values[":enrichment"] = fields.enrichment;
   }
@@ -345,11 +340,9 @@ export function applyItemPatch(
         ? fields.confirmationCode
         : existing.confirmationCode,
     enrichment:
-      fields.enrichment === null
-        ? undefined
-        : fields.enrichment !== undefined
-          ? fields.enrichment
-          : existing.enrichment,
+      fields.enrichment !== undefined
+        ? fields.enrichment
+        : existing.enrichment,
   };
 
   const details = fields.details ?? existing.details;

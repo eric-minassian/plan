@@ -413,94 +413,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-  /api/v1/enrich/flight:
-    post:
-      operationId: enrichFlight
-      tags: [Owner]
-      summary: Flight schedule enrichment
-      description: |
-        Lookup flight schedule by number + civil date. **Owner JWT required**
-        (never public). Suggest-then-confirm: returns a prefill DTO; does **not**
-        write itinerary items. Schedule not found is **200** with
-        `{ status: "not_found" }` (not ApiErrorBody). Ambiguous matches → 422
-        `AmbiguousEnrichment`. Live provider is AeroDataBox when
-        `enrichment.flight.live` / `ENRICHMENT_FLIGHT_LIVE` is true; default is
-        mock. Per-user rate limit (default 60/hour) and monthly $ budget apply.
-      security:
-        - ownerBearer: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EnrichFlightRequest"
-            examples:
-              ua100:
-                summary: United 100
-                value:
-                  flightNumber: "UA100"
-                  date: "2026-07-15"
-                  departureAirportHint: "SFO"
-      responses:
-        "200":
-          description: |
-            Enrichment suggestion (found / cancelled) or not_found success DTO.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FlightEnrichmentResponse"
-              examples:
-                found:
-                  summary: Schedule found
-                  value:
-                    status: found
-                    airlineCode: UA
-                    airlineName: United Airlines
-                    flightNumber: "100"
-                    departure:
-                      airportIata: SFO
-                      airportName: San Francisco International Airport
-                      scheduledAt: "2026-07-15T08:00:00-07:00"
-                      lat: 37.6213
-                      lng: -122.379
-                      timezone: America/Los_Angeles
-                    arrival:
-                      airportIata: JFK
-                      scheduledAt: "2026-07-15T16:30:00-04:00"
-                      lat: 40.6413
-                      lng: -73.7781
-                      timezone: America/New_York
-                    provider: mock
-                    fetchedAt: "2026-07-11T12:00:00Z"
-                    confidence: 0.95
-                not_found:
-                  summary: Schedule not found (still HTTP 200)
-                  value:
-                    status: not_found
-                    provider: mock
-                    fetchedAt: "2026-07-11T12:00:00Z"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "422":
-          description: Ambiguous enrichment (multiple candidates)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBody"
-        "429":
-          description: Per-user enrich rate limit exceeded
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBody"
-        "502":
-          description: Upstream unavailable or monthly budget exceeded
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBody"
 components:
   securitySchemes:
     ownerBearer:
@@ -741,11 +653,7 @@ components:
           maxLength: 64
         enrichment:
           type: object
-          nullable: true
           additionalProperties: true
-          description: |
-            Enrichment meta to set, or JSON `null` to clear stored enrichment
-            (e.g. after a failed re-lookup). Omit to leave unchanged.
         details:
           type: object
           additionalProperties: true
@@ -840,96 +748,6 @@ components:
           type: string
         version:
           type: integer
-    EnrichFlightRequest:
-      type: object
-      additionalProperties: false
-      required: [flightNumber, date]
-      properties:
-        flightNumber:
-          type: string
-          minLength: 1
-          maxLength: 16
-          description: Airline designator + number (e.g. UA100 or UA 100)
-        date:
-          $ref: "#/components/schemas/CivilDate"
-        departureAirportHint:
-          type: string
-          pattern: '^[A-Za-z]{3}$'
-          description: Optional departure IATA to disambiguate
-    FlightEndpointSuggestion:
-      type: object
-      additionalProperties: false
-      required: [airportIata, scheduledAt]
-      properties:
-        airportIata:
-          type: string
-        airportName:
-          type: string
-        scheduledAt:
-          type: string
-          description: Canonical Instant (ISO-8601 second precision with zone)
-        terminal:
-          type: string
-        gate:
-          type: string
-        lat:
-          type: number
-        lng:
-          type: number
-        timezone:
-          type: string
-    FlightEnrichmentFound:
-      type: object
-      additionalProperties: false
-      required:
-        - status
-        - flightNumber
-        - departure
-        - arrival
-        - provider
-        - fetchedAt
-      properties:
-        status:
-          type: string
-          enum: [found, cancelled]
-        airlineCode:
-          type: string
-        airlineName:
-          type: string
-        flightNumber:
-          type: string
-        departure:
-          $ref: "#/components/schemas/FlightEndpointSuggestion"
-        arrival:
-          $ref: "#/components/schemas/FlightEndpointSuggestion"
-        provider:
-          type: string
-          description: mock | aerodatabox
-        fetchedAt:
-          type: string
-        confidence:
-          type: number
-        operatedBy:
-          type: string
-    FlightEnrichmentNotFound:
-      type: object
-      additionalProperties: false
-      required: [status, provider, fetchedAt]
-      properties:
-        status:
-          type: string
-          const: not_found
-        provider:
-          type: string
-        fetchedAt:
-          type: string
-    FlightEnrichmentResponse:
-      oneOf:
-        - $ref: "#/components/schemas/FlightEnrichmentFound"
-        - $ref: "#/components/schemas/FlightEnrichmentNotFound"
-      description: |
-        Success body for POST /enrich/flight. `not_found` is HTTP 200 (not
-        ApiErrorBody) so clients do not confuse it with resource 404.
     ApiErrorBody:
       type: object
       additionalProperties: false

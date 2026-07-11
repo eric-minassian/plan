@@ -9,24 +9,6 @@ import {
 } from "./auth/share-auth.js";
 import type { ApiConfig } from "./config.js";
 import {
-  makeInMemoryEnrichBudget,
-  DEFAULT_LIVE_FLIGHT_LOOKUP_COST_USD,
-} from "./enrichment/budget.js";
-import { createFlightProvider } from "./enrichment/create-flight-provider.js";
-import {
-  FlightProviderService,
-  type FlightProvider,
-} from "./enrichment/flight-provider.js";
-import {
-  EnrichmentGuards,
-  type EnrichmentGuardsService,
-} from "./enrichment/guards.js";
-import {
-  makeInMemoryEnrichRateLimiter,
-  DEFAULT_ENRICH_RATE_LIMIT_PER_HOUR,
-} from "./enrichment/rate-limit.js";
-import { makeMockFlightProvider } from "./enrichment/mock-flight-provider.js";
-import {
   AppError,
   appErrorToHttpResponse,
   unexpectedToAppError,
@@ -42,7 +24,6 @@ import type { Logger } from "./logging/logger.js";
 import { consoleLogger } from "./logging/logger.js";
 import { TripRepo, type TripRepository } from "./repos/trip-repo.js";
 import { UserRepo, type UserRepository } from "./repos/user-repo.js";
-import { handleEnrichFlight } from "./routes/enrich.js";
 import { handleHealth } from "./routes/health.js";
 import { handleMe } from "./routes/me.js";
 import {
@@ -67,9 +48,7 @@ export type RouteHandlerEnv =
   | UserRepo
   | TripRepo
   | RequestContext
-  | CurrentOwner
-  | FlightProviderService
-  | EnrichmentGuards;
+  | CurrentOwner;
 
 export interface RouteDefinition {
   readonly method: string;
@@ -162,12 +141,6 @@ export function buildRoutes(
       authClass: "owner",
       handler: makeDeleteTripHandler(config),
     },
-    {
-      method: "POST",
-      path: "/api/v1/enrich/flight",
-      authClass: "owner",
-      handler: handleEnrichFlight,
-    },
   ];
 }
 
@@ -181,44 +154,6 @@ export interface RouterDeps {
   readonly shareAuth?: ShareAuthService;
   readonly logger?: Logger;
   readonly routes?: readonly RouteDefinition[];
-  /** Defaults to MockFlightProvider when omitted. */
-  readonly flightProvider?: FlightProvider;
-  /** Defaults to permissive in-memory guards when omitted. */
-  readonly enrichmentGuards?: EnrichmentGuardsService;
-}
-
-/** Default enrichment guards for unit tests / local (mock cost 0). */
-export function makeDefaultEnrichmentGuards(
-  config?: Pick<
-    ApiConfig,
-    | "enrichmentRateLimitPerHour"
-    | "enrichmentMonthlyBudgetUsd"
-    | "enrichmentLiveFlightCostUsd"
-  >,
-): EnrichmentGuardsService {
-  return {
-    rateLimiter: makeInMemoryEnrichRateLimiter(
-      config?.enrichmentRateLimitPerHour ?? DEFAULT_ENRICH_RATE_LIMIT_PER_HOUR,
-    ),
-    budget: makeInMemoryEnrichBudget(
-      config?.enrichmentMonthlyBudgetUsd ?? 25,
-    ),
-    liveLookupCostUsd:
-      config?.enrichmentLiveFlightCostUsd ?? DEFAULT_LIVE_FLIGHT_LOOKUP_COST_USD,
-  };
-}
-
-/**
- * Build flight provider + guards from full API config (Lambda wiring).
- */
-export function makeEnrichmentRuntime(config: ApiConfig): {
-  readonly flightProvider: FlightProvider;
-  readonly enrichmentGuards: EnrichmentGuardsService;
-} {
-  return {
-    flightProvider: createFlightProvider(config),
-    enrichmentGuards: makeDefaultEnrichmentGuards(config),
-  };
 }
 
 interface MatchedRoute {
@@ -304,10 +239,6 @@ export function handleRequest(
     deps.shareAuth ??
     makeShareAuthStub(() => request.cookies[SHARE_COOKIE_NAME]);
 
-  const flightProvider = deps.flightProvider ?? makeMockFlightProvider();
-  const enrichmentGuards =
-    deps.enrichmentGuards ?? makeDefaultEnrichmentGuards();
-
   const requestLayer = Layer.succeed(RequestContext, {
     request,
     authClass: route.authClass,
@@ -317,16 +248,12 @@ export function handleRequest(
   const shareLayer = Layer.succeed(ShareAuth, shareAuth);
   const userLayer = Layer.succeed(UserRepo, deps.userRepo);
   const tripLayer = Layer.succeed(TripRepo, deps.tripRepo);
-  const flightLayer = Layer.succeed(FlightProviderService, flightProvider);
-  const enrichGuardsLayer = Layer.succeed(EnrichmentGuards, enrichmentGuards);
   const appLayer = Layer.mergeAll(
     requestLayer,
     ownerLayer,
     shareLayer,
     userLayer,
     tripLayer,
-    flightLayer,
-    enrichGuardsLayer,
   );
 
   type CoreEnv =
@@ -334,9 +261,7 @@ export function handleRequest(
     | ShareAuth
     | UserRepo
     | TripRepo
-    | RequestContext
-    | FlightProviderService
-    | EnrichmentGuards;
+    | RequestContext;
 
   const program = Effect.gen(function* () {
     // Auth class gate: verify once, inject principal for the handler.
