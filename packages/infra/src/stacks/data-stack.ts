@@ -17,6 +17,7 @@ export interface DataStackProps extends cdk.StackProps {
  */
 function docsCorsOrigins(stage: Stage): string[] {
   const productionSpa = "https://plan.ericminassian.com";
+  const stagingSpa = "https://plan-staging.ericminassian.com";
   const localVite = "http://localhost:5173";
 
   switch (stage) {
@@ -24,8 +25,7 @@ function docsCorsOrigins(stage: Stage): string[] {
       // Design requires prod SPA + local Vite for dogfood/dev against real bucket.
       return [productionSpa, localVite];
     case "staging":
-      // When a staging SPA host exists, add it here (e.g. plan-staging.ericminassian.com).
-      return [productionSpa, localVite];
+      return [stagingSpa, productionSpa, localVite];
     case "dev":
       return [productionSpa, localVite];
   }

@@ -2,14 +2,16 @@
 
 AWS CDK (v2) infrastructure for TripPlan. **All stacks deploy to `us-east-1`.**
 
-## Stacks (this PR)
+## Stacks
 
 | Stack | ID pattern | Contents |
 |-------|------------|----------|
 | **FoundationStack** | `TripPlan-Foundation-{stage}` | CloudWatch log retention defaults; Secrets Manager placeholders (AeroDataBox, MapTiler server key) |
 | **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle) |
 | **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; routes `GET /api/v1/health` (public), `GET /api/v1/me` (owner JWT in-Lambda); env `TABLE_NAME` / `AUTH_ISSUER` / `AUTH_AUDIENCE` / `STAGE` / `PUBLIC_API_BASE_URL` (prod/staging). **Profile store is still in-memory** until Dynamo `UserRepository` lands — table R/W grant is preparatory. CORS: prod/staging SPA host only; localhost only on dev. |
-**Not in this package yet:** WebStack, ObservabilityStack.  
+| **WebStack** | `TripPlan-Web-{stage}` | Private SPA S3 bucket + CloudFront (OAC); default SPA (403/404 → `/index.html`); `/api/*` → API Gateway HTTP API; CSP response headers; runtime `/config.json`; optional custom domain + Route53 |
+
+**Later:** ObservabilityStack.  
 **Never planned:** Cognito / AuthStack — owner auth is external OIDC ([eric-minassian/auth](https://github.com/eric-minassian/auth)).
 
 ## Requirements
@@ -51,6 +53,102 @@ pnpm exec cdk destroy --all -c stage=dev
 
 Context: `-c stage=…` (defaults to `dev` in `cdk.json`). Only `dev`, `staging`, and `prod` are accepted.
 
+## WebStack / CloudFront / domain
+
+Single public host topology: SPA + API under one origin so share cookies stay first-party.
+
+| Path | Origin |
+|------|--------|
+| `/*` (default) | SPA S3 bucket via Origin Access Control |
+| `/api/*` | API Gateway HTTP API (`HttpApiUrl` from ApiStack) |
+
+SPA routing: CloudFront custom error responses map **403** and **404** → `/index.html` (HTTP 200).
+
+### Domain defaults (stage-aware)
+
+| Stage | Default custom domain |
+|-------|------------------------|
+| `prod` | `plan.ericminassian.com` |
+| `staging` | `plan-staging.ericminassian.com` |
+| `dev` | none (CloudFront `*.cloudfront.net` only) |
+
+Override or disable with context:
+
+```bash
+# Custom hostname
+pnpm exec cdk synth -c stage=prod -c webDomain=plan.ericminassian.com
+
+# Explicitly no custom domain (even on prod)
+pnpm exec cdk synth -c stage=prod -c webDomain=
+```
+
+### ACM certificate (us-east-1)
+
+CloudFront requires the cert in **us-east-1**. Pass an existing certificate ARN via context so **synth works without a real cert** (no aliases until ARN is set):
+
+```bash
+pnpm exec cdk synth -c stage=prod \
+  -c certificateArn=arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+Without `certificateArn`, WebStack still synthesizes and deploys using the default CloudFront domain. If a default/custom `webDomain` is set without a cert, CDK emits a warning and skips aliases.
+
+Create/validate the cert (DNS or email) in ACM **us-east-1** before attaching it — this package does not mint certificates.
+
+### Route53 (optional)
+
+When both zone context keys are present **and** a custom domain + cert are active, WebStack creates A/AAAA aliases:
+
+```bash
+pnpm exec cdk deploy --all -c stage=prod \
+  -c certificateArn=arn:aws:acm:us-east-1:…:certificate/… \
+  -c hostedZoneId=Z0123456789ABC \
+  -c hostedZoneName=ericminassian.com
+```
+
+If the zone is omitted, point DNS at the `DistributionDomainName` output manually.
+
+### CSP (response headers policy)
+
+Applied to the SPA default behavior:
+
+```
+default-src 'self';
+script-src 'self';
+style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob: https://*.maptiler.com;
+connect-src 'self' https://auth.ericminassian.com https://*.maptiler.com https://<docs-bucket>.s3.us-east-1.amazonaws.com;
+worker-src 'self' blob:;
+frame-src 'none';
+base-uri 'self';
+form-action 'self';
+```
+
+Docs bucket host is injected from DataStack (`bucketRegionalDomainName`).
+
+### Runtime `config.json`
+
+WebStack deploys `/config.json` to the SPA bucket (BucketDeployment, `prune: false` so CI asset sync is not wiped):
+
+```json
+{
+  "authIssuer": "https://auth.ericminassian.com",
+  "authClientId": "plan",
+  "mapTilerApiKey": ""
+}
+```
+
+Fill `mapTilerApiKey` (referrer-restricted browser key) after deploy or via your static-asset pipeline. SPA static files (`index.html`, assets) are **not** deployed by CDK — build `@tripplan/web` and sync `dist/` to `SpaBucketName`, then invalidate the distribution.
+
+### Deploy SPA assets
+
+```bash
+pnpm --filter @tripplan/web build
+# aws s3 sync packages/web/dist s3://$SPA_BUCKET/ --delete
+# keep config.json if you manage the MapTiler key outside the build
+# aws cloudfront create-invalidation --distribution-id $DIST_ID --paths '/*'
+```
+
 ## Outputs
 
 | Output | Description |
@@ -61,6 +159,9 @@ Context: `-c stage=…` (defaults to `dev` in `cdk.json`). Only `dev`, `staging`
 | `DefaultLogRetentionDays` | Stage default log retention (exported) |
 | `HttpApiUrl` | HTTP API base URL |
 | `ApiFunctionName` | API Lambda function name |
+| `SpaBucketName` | SPA static assets bucket |
+| `DistributionId` / `DistributionDomainName` | CloudFront distribution |
+| `WebUrl` | Public web base URL (custom domain when cert configured) |
 
 ### Secrets (placeholders)
 
