@@ -1,3 +1,15 @@
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@eric-minassian/design/components/field";
+import { Input } from "@eric-minassian/design/components/input";
+import { Spinner } from "@eric-minassian/design/components/spinner";
+import { Textarea } from "@eric-minassian/design/components/textarea";
 import type {
   CreateItineraryItem,
   EnrichFlightRequest,
@@ -17,6 +29,8 @@ import {
   instantToWallClockLocal,
   wallClockInZoneToInstant,
 } from "../timeline/datetime.ts";
+import { ErrorAlert } from "./ErrorAlert.tsx";
+import { InfoAlert } from "./InfoAlert.tsx";
 
 export type FlightFormMode =
   | { readonly kind: "create" }
@@ -479,305 +493,327 @@ export function FlightForm(props: FlightFormProps) {
   const lookupDesignatorPreview = designatorForLookup(form);
 
   return (
-    <form className="form item-form" onSubmit={(e) => void onSubmit(e)}>
-      <h3 className="item-form__title">
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => void onSubmit(e)}
+    >
+      <h3 className="font-heading text-sm font-medium">
         {mode.kind === "create" ? "Add flight" : "Edit flight"}
       </h3>
       {displayError !== undefined ? (
-        <p className="banner banner--error" role="alert">
-          {displayError}
-        </p>
+        <ErrorAlert>{displayError}</ErrorAlert>
       ) : null}
       {lookupMessage !== undefined ? (
-        <p className="banner banner--info" role="status">
-          {lookupMessage}
-        </p>
+        <InfoAlert>{lookupMessage}</InfoAlert>
       ) : null}
 
       {onEnrichFlight !== undefined ? (
-        <fieldset className="item-form__lookup" disabled={busy}>
-          <legend className="item-form__lookup-legend">
-            Lookup schedule (optional)
-          </legend>
-          <p className="field__hint">
+        <FieldSet
+          disabled={busy}
+          className="rounded-lg border border-dashed p-3"
+        >
+          <FieldLegend variant="label">Lookup schedule (optional)</FieldLegend>
+          <FieldDescription className="mb-3">
             Suggests times and airports from the flight number and date. You
             always review and save — nothing is written automatically.
             {lookupDesignatorPreview.length > 0
               ? ` Lookup uses “${lookupDesignatorPreview}”.`
               : ""}
-          </p>
-          <div className="form__row">
-            <label className="field">
-              <span className="field__label">Flight number</span>
-              <input
-                className="field__input"
-                type="text"
-                name="lookupFlightNumber"
-                value={form.flightNumber}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, flightNumber: e.target.value }));
-                }}
-                placeholder="UA100"
-                autoComplete="off"
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Date</span>
-              <input
-                className="field__input"
-                type="date"
-                name="lookupDate"
-                value={lookupDate}
-                onChange={(e) => {
-                  setLookupDate(e.target.value);
-                }}
-                required={false}
-              />
-            </label>
-          </div>
-          <div className="form__row">
-            <label className="field">
-              <span className="field__label">From hint (IATA)</span>
-              <input
-                className="field__input"
-                type="text"
-                name="lookupHint"
-                maxLength={3}
-                value={lookupHint}
-                onChange={(e) => {
-                  setLookupHint(e.target.value);
-                }}
-                placeholder="SFO"
-              />
-            </label>
-            <div className="field field--actions">
-              <span className="field__label">&nbsp;</span>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                disabled={busy}
-                onClick={() => {
-                  void onLookup();
-                }}
-              >
-                {lookupBusy ? "Looking up…" : "Lookup"}
-              </button>
+          </FieldDescription>
+          <FieldGroup>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="lookup-flight">Flight number</FieldLabel>
+                <Input
+                  id="lookup-flight"
+                  type="text"
+                  name="lookupFlightNumber"
+                  value={form.flightNumber}
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, flightNumber: e.target.value }));
+                  }}
+                  placeholder="UA100"
+                  autoComplete="off"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="lookup-date">Date</FieldLabel>
+                <Input
+                  id="lookup-date"
+                  type="date"
+                  name="lookupDate"
+                  value={lookupDate}
+                  onChange={(e) => {
+                    setLookupDate(e.target.value);
+                  }}
+                />
+              </Field>
             </div>
-          </div>
-        </fieldset>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="lookup-hint">From hint (IATA)</FieldLabel>
+                <Input
+                  id="lookup-hint"
+                  type="text"
+                  name="lookupHint"
+                  maxLength={3}
+                  value={lookupHint}
+                  onChange={(e) => {
+                    setLookupHint(e.target.value);
+                  }}
+                  placeholder="SFO"
+                />
+              </Field>
+              <Field className="justify-end">
+                <FieldLabel className="opacity-0" htmlFor="lookup-btn">
+                  Lookup
+                </FieldLabel>
+                <Button
+                  id="lookup-btn"
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    void onLookup();
+                  }}
+                >
+                  {lookupBusy ? (
+                    <>
+                      <Spinner data-icon="inline-start" />
+                      Looking up…
+                    </>
+                  ) : (
+                    "Lookup"
+                  )}
+                </Button>
+              </Field>
+            </div>
+          </FieldGroup>
+        </FieldSet>
       ) : null}
 
-      <label className="field">
-        <span className="field__label">Title</span>
-        <input
-          className="field__input"
-          type="text"
-          name="title"
-          maxLength={200}
-          required
-          value={form.title}
-          onChange={(e) => {
-            setForm((f) => ({ ...f, title: e.target.value }));
-          }}
-          placeholder="UA 100 SFO → JFK"
-        />
-      </label>
-
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Flight number</span>
-          <input
-            className="field__input"
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="flight-title">Title</FieldLabel>
+          <Input
+            id="flight-title"
             type="text"
-            name="flightNumber"
+            name="title"
+            maxLength={200}
             required
-            value={form.flightNumber}
+            value={form.title}
             onChange={(e) => {
-              setForm((f) => ({ ...f, flightNumber: e.target.value }));
+              setForm((f) => ({ ...f, title: e.target.value }));
             }}
-            placeholder="100"
+            placeholder="UA 100 SFO → JFK"
           />
-        </label>
-        <label className="field">
-          <span className="field__label">Airline code</span>
-          <input
-            className="field__input"
-            type="text"
-            name="airlineCode"
-            value={form.airlineCode}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, airlineCode: e.target.value }));
-            }}
-            placeholder="UA"
-          />
-        </label>
-      </div>
+        </Field>
 
-      <label className="field">
-        <span className="field__label">Airline name</span>
-        <input
-          className="field__input"
-          type="text"
-          name="airlineName"
-          value={form.airlineName}
-          onChange={(e) => {
-            setForm((f) => ({ ...f, airlineName: e.target.value }));
-          }}
-          placeholder="United Airlines"
-        />
-      </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="flight-number">Flight number</FieldLabel>
+            <Input
+              id="flight-number"
+              type="text"
+              name="flightNumber"
+              required
+              value={form.flightNumber}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, flightNumber: e.target.value }));
+              }}
+              placeholder="100"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="airline-code">Airline code</FieldLabel>
+            <Input
+              id="airline-code"
+              type="text"
+              name="airlineCode"
+              value={form.airlineCode}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, airlineCode: e.target.value }));
+              }}
+              placeholder="UA"
+            />
+          </Field>
+        </div>
 
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">From (IATA)</span>
-          <input
-            className="field__input"
+        <Field>
+          <FieldLabel htmlFor="airline-name">Airline name</FieldLabel>
+          <Input
+            id="airline-name"
             type="text"
-            name="departureAirport"
-            value={form.departureAirport}
+            name="airlineName"
+            value={form.airlineName}
             onChange={(e) => {
-              setForm((f) => ({ ...f, departureAirport: e.target.value }));
+              setForm((f) => ({ ...f, airlineName: e.target.value }));
             }}
-            placeholder="SFO"
+            placeholder="United Airlines"
           />
-        </label>
-        <label className="field">
-          <span className="field__label">To (IATA)</span>
-          <input
-            className="field__input"
-            type="text"
-            name="arrivalAirport"
-            value={form.arrivalAirport}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, arrivalAirport: e.target.value }));
-            }}
-            placeholder="JFK"
-          />
-        </label>
-      </div>
+        </Field>
 
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Dep terminal</span>
-          <input
-            className="field__input"
-            type="text"
-            name="departureTerminal"
-            value={form.departureTerminal}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, departureTerminal: e.target.value }));
-            }}
-            placeholder="3"
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Arr terminal</span>
-          <input
-            className="field__input"
-            type="text"
-            name="arrivalTerminal"
-            value={form.arrivalTerminal}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, arrivalTerminal: e.target.value }));
-            }}
-            placeholder="7"
-          />
-        </label>
-      </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="dep-airport">From (IATA)</FieldLabel>
+            <Input
+              id="dep-airport"
+              type="text"
+              name="departureAirport"
+              value={form.departureAirport}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, departureAirport: e.target.value }));
+              }}
+              placeholder="SFO"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="arr-airport">To (IATA)</FieldLabel>
+            <Input
+              id="arr-airport"
+              type="text"
+              name="arrivalAirport"
+              value={form.arrivalAirport}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, arrivalAirport: e.target.value }));
+              }}
+              placeholder="JFK"
+            />
+          </Field>
+        </div>
 
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Departure ({tripTimezone})</span>
-          <input
-            className="field__input"
-            type="datetime-local"
-            name="startAt"
-            value={form.startAtLocal}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, startAtLocal: e.target.value }));
-            }}
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Arrival ({tripTimezone})</span>
-          <input
-            className="field__input"
-            type="datetime-local"
-            name="endAt"
-            value={form.endAtLocal}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, endAtLocal: e.target.value }));
-            }}
-          />
-        </label>
-      </div>
-      <p className="field__hint">
-        Times are entered in {tripTimezone}
-        {form.startTimeZone.length > 0 || form.endTimeZone.length > 0
-          ? ` (airport zones: ${form.startTimeZone || "—"} → ${form.endTimeZone || "—"})`
-          : ""}
-        . Clear a field to remove that time.
-      </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="dep-terminal">Dep terminal</FieldLabel>
+            <Input
+              id="dep-terminal"
+              type="text"
+              name="departureTerminal"
+              value={form.departureTerminal}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, departureTerminal: e.target.value }));
+              }}
+              placeholder="3"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="arr-terminal">Arr terminal</FieldLabel>
+            <Input
+              id="arr-terminal"
+              type="text"
+              name="arrivalTerminal"
+              value={form.arrivalTerminal}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, arrivalTerminal: e.target.value }));
+              }}
+              placeholder="7"
+            />
+          </Field>
+        </div>
 
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Confirmation</span>
-          <input
-            className="field__input"
-            type="text"
-            name="confirmationCode"
-            maxLength={64}
-            value={form.confirmationCode}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="dep-time">
+              Departure ({tripTimezone})
+            </FieldLabel>
+            <Input
+              id="dep-time"
+              type="datetime-local"
+              name="startAt"
+              value={form.startAtLocal}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, startAtLocal: e.target.value }));
+              }}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="arr-time">
+              Arrival ({tripTimezone})
+            </FieldLabel>
+            <Input
+              id="arr-time"
+              type="datetime-local"
+              name="endAt"
+              value={form.endAtLocal}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, endAtLocal: e.target.value }));
+              }}
+            />
+          </Field>
+        </div>
+        <FieldDescription>
+          Times are entered in {tripTimezone}
+          {form.startTimeZone.length > 0 || form.endTimeZone.length > 0
+            ? ` (airport zones: ${form.startTimeZone || "—"} → ${form.endTimeZone || "—"})`
+            : ""}
+          . Clear a field to remove that time.
+        </FieldDescription>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="confirmation">Confirmation</FieldLabel>
+            <Input
+              id="confirmation"
+              type="text"
+              name="confirmationCode"
+              maxLength={64}
+              value={form.confirmationCode}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, confirmationCode: e.target.value }));
+              }}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="seat">Seat</FieldLabel>
+            <Input
+              id="seat"
+              type="text"
+              name="seat"
+              value={form.seat}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, seat: e.target.value }));
+              }}
+              placeholder="12A"
+            />
+          </Field>
+        </div>
+
+        <Field>
+          <FieldLabel htmlFor="flight-notes">Notes</FieldLabel>
+          <Textarea
+            id="flight-notes"
+            name="notes"
+            maxLength={5000}
+            rows={2}
+            value={form.notes}
             onChange={(e) => {
-              setForm((f) => ({ ...f, confirmationCode: e.target.value }));
+              setForm((f) => ({ ...f, notes: e.target.value }));
             }}
           />
-        </label>
-        <label className="field">
-          <span className="field__label">Seat</span>
-          <input
-            className="field__input"
-            type="text"
-            name="seat"
-            value={form.seat}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, seat: e.target.value }));
-            }}
-            placeholder="12A"
-          />
-        </label>
-      </div>
+        </Field>
+      </FieldGroup>
 
-      <label className="field">
-        <span className="field__label">Notes</span>
-        <textarea
-          className="field__input field__textarea"
-          name="notes"
-          maxLength={5000}
-          rows={2}
-          value={form.notes}
-          onChange={(e) => {
-            setForm((f) => ({ ...f, notes: e.target.value }));
-          }}
-        />
-      </label>
-
-      <div className="form__actions">
-        <button type="submit" className="btn btn--primary" disabled={busy}>
-          {submitting
-            ? "Saving…"
-            : mode.kind === "create"
-              ? "Add flight"
-              : "Save flight"}
-        </button>
-        <button
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={busy}>
+          {submitting ? (
+            <>
+              <Spinner data-icon="inline-start" />
+              Saving…
+            </>
+          ) : mode.kind === "create" ? (
+            "Add flight"
+          ) : (
+            "Save flight"
+          )}
+        </Button>
+        <Button
           type="button"
-          className="btn btn--ghost"
+          variant="ghost"
           disabled={busy}
           onClick={onCancel}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );

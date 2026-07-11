@@ -1,9 +1,18 @@
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@eric-minassian/design/components/card";
+import { Spinner } from "@eric-minassian/design/components/spinner";
 import { AuthError } from "@ericminassian/auth/client";
 import { useAuth } from "@ericminassian/auth/react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthClient } from "../auth/AuthClientContext.tsx";
 import { completeAuthCallback } from "../auth/complete-callback.ts";
+import { ErrorAlert } from "../components/ErrorAlert.tsx";
 
 /**
  * Completes the Authorization Code + PKCE redirect.
@@ -67,29 +76,33 @@ export function AuthCallbackPage() {
 
   if (error !== undefined) {
     return (
-      <div className="panel panel--error">
-        <h2>Sign-in failed</h2>
-        <p>{error}</p>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() => {
-            void client.signInWithRedirect({ returnTo: "/" });
-          }}
-        >
-          Try again
-        </button>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Sign-in failed</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <ErrorAlert>{error}</ErrorAlert>
+          <Button
+            type="button"
+            onClick={() => {
+              void client.signInWithRedirect({ returnTo: "/" });
+            }}
+          >
+            Try again
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className="panel">
-      <p className="muted">
+    <Card>
+      <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+        <Spinner />
         {state.status === "authenticated"
           ? "Signed in — redirecting…"
           : "Completing sign-in…"}
-      </p>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

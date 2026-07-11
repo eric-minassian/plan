@@ -1,9 +1,36 @@
+import { Badge } from "@eric-minassian/design/components/badge";
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@eric-minassian/design/components/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@eric-minassian/design/components/empty";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@eric-minassian/design/components/item";
+import { Separator } from "@eric-minassian/design/components/separator";
+import { Spinner } from "@eric-minassian/design/components/spinner";
 import { useAuth } from "@ericminassian/auth/react";
 import type {
   CreateItineraryItem,
   ItineraryItem,
   UpdateItineraryItem,
 } from "@tripplan/domain";
+import { ArrowLeftIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -18,14 +45,17 @@ import {
 } from "../api/client.ts";
 import { ApiClientError, formatApiError } from "../api/errors.ts";
 import { useAuthClient } from "../auth/AuthClientContext.tsx";
+import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { FlightForm } from "../components/FlightForm.tsx";
 import { NoteForm } from "../components/NoteForm.tsx";
 import { SharePanel } from "../components/SharePanel.tsx";
 import { bucketTripItems } from "../timeline/bucket.ts";
+import { formatCivilDateLabel } from "../timeline/datetime.ts";
 import {
-  formatCivilDateLabel,
-  formatInstantInZone,
-} from "../timeline/datetime.ts";
+  itemSubtitle,
+  itemTypeBadgeVariant,
+  itemTypeLabel,
+} from "../timeline/item-display.ts";
 
 type EditorState =
   | { readonly kind: "closed" }
@@ -49,60 +79,6 @@ type EditorState =
 
 function newSessionId(): string {
   return crypto.randomUUID();
-}
-
-function itemTypeLabel(type: ItineraryItem["type"]): string {
-  switch (type) {
-    case "flight":
-      return "Flight";
-    case "note":
-      return "Note";
-    case "hotel":
-      return "Hotel";
-    case "train":
-      return "Train";
-    case "transport":
-      return "Transport";
-    case "activity":
-      return "Activity";
-    case "ticket":
-      return "Ticket";
-    case "custom":
-      return "Custom";
-  }
-}
-
-function itemSubtitle(
-  item: ItineraryItem,
-  timezone: string,
-): string | undefined {
-  const start = formatInstantInZone(item.startAt, timezone);
-  const end = formatInstantInZone(item.endAt, timezone);
-  if (item.type === "flight") {
-    const route = [
-      item.details.departureAirport,
-      item.details.arrivalAirport,
-    ]
-      .filter((x): x is string => x !== undefined && x.length > 0)
-      .join(" → ");
-    const bits = [
-      item.details.airlineCode !== undefined
-        ? `${item.details.airlineCode}${item.details.flightNumber}`
-        : item.details.flightNumber,
-      route.length > 0 ? route : undefined,
-      start,
-      end !== undefined ? `→ ${end}` : undefined,
-    ].filter((x): x is string => x !== undefined);
-    return bits.join(" · ");
-  }
-  if (item.type === "note") {
-    const body = item.notes?.trim();
-    if (body !== undefined && body.length > 0) {
-      return body.length > 120 ? `${body.slice(0, 117)}…` : body;
-    }
-    return start;
-  }
-  return start;
 }
 
 function hasConfirmation(item: ItineraryItem): boolean {
@@ -344,58 +320,64 @@ export function TripDetailPage() {
     const editable = item.type === "flight" || item.type === "note";
     const subtitle = itemSubtitle(item, timezone);
     return (
-      <li key={item.itemId} className="item-card">
-        <div className="item-card__main">
-          <div className="item-card__head">
-            <span className={`item-type item-type--${item.type}`}>
+      <Item key={item.itemId} variant="outline" size="sm">
+        <ItemContent>
+          <ItemTitle className="line-clamp-none flex flex-wrap items-center gap-2">
+            <Badge variant={itemTypeBadgeVariant(item.type)}>
               {itemTypeLabel(item.type)}
-            </span>
-            <span className="item-card__title">{item.title}</span>
-          </div>
+            </Badge>
+            <span>{item.title}</span>
+          </ItemTitle>
           {subtitle !== undefined ? (
-            <p className="item-card__sub">{subtitle}</p>
+            <ItemDescription className="line-clamp-none whitespace-pre-wrap">
+              {subtitle}
+            </ItemDescription>
           ) : null}
           {item.type === "flight" && hasConfirmation(item) ? (
-            <p className="item-card__meta">
+            <ItemDescription className="line-clamp-none">
               Confirmation: {item.confirmationCode}
-            </p>
+            </ItemDescription>
           ) : null}
-        </div>
-        <div className="item-card__actions">
+        </ItemContent>
+        <ItemActions>
           {editable ? (
-            <button
+            <Button
               type="button"
-              className="btn btn--ghost btn--sm"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 openEdit(item);
               }}
             >
               Edit
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button
             type="button"
-            className="btn btn--ghost btn--sm"
+            variant="ghost"
+            size="sm"
             disabled={deletingId === item.itemId}
             onClick={() => {
               void handleDelete(item);
             }}
           >
             {deletingId === item.itemId ? "…" : "Delete"}
-          </button>
-        </div>
-      </li>
+          </Button>
+        </ItemActions>
+      </Item>
     );
   }
 
   if (tripId === undefined || tripId.length === 0) {
     return (
-      <div className="panel panel--error">
-        <p className="banner banner--error" role="alert">
-          Missing trip id.
-        </p>
-        <Link to="/">Back to trips</Link>
-      </div>
+      <Card>
+        <CardContent className="flex flex-col gap-3 pt-(--card-spacing)">
+          <ErrorAlert title="Missing trip">Missing trip id.</ErrorAlert>
+          <Button variant="outline" asChild>
+            <Link to="/">Back to trips</Link>
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -416,148 +398,172 @@ export function TripDetailPage() {
         : undefined;
 
   return (
-    <div className="trip-detail">
-      <div className="trip-detail__nav">
-        <Link to="/" className="trip-detail__back">
-          ← All trips
-        </Link>
+    <div className="flex flex-col gap-5">
+      <div>
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/">
+            <ArrowLeftIcon data-icon="inline-start" />
+            All trips
+          </Link>
+        </Button>
       </div>
 
       {loading && detail === undefined ? (
-        <section className="panel">
-          <p className="muted">Loading trip…</p>
-        </section>
+        <Card>
+          <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+            <Spinner />
+            Loading trip…
+          </CardContent>
+        </Card>
       ) : null}
 
-      {listError !== undefined ? (
-        <p className="banner banner--error" role="alert">
-          {listError}
-        </p>
-      ) : null}
+      {listError !== undefined ? <ErrorAlert>{listError}</ErrorAlert> : null}
 
       {detail !== undefined ? (
         <>
-          <section className="panel">
-            <div className="panel__header">
-              <div>
-                <h2>{detail.title}</h2>
-                <p className="trip-detail__meta muted">
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle className="text-base">{detail.title}</CardTitle>
+              <CardDescription className="flex flex-wrap gap-x-3 gap-y-0.5">
+                <span>
                   {detail.startDate} → {detail.endDate}
-                  <span className="trip-detail__tz">{detail.timezone}</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => {
-                  void loadTrip();
-                }}
-                disabled={loading}
-              >
-                Refresh
-              </button>
-            </div>
-          </section>
+                </span>
+                <span className="font-mono text-[0.7rem]">
+                  {detail.timezone}
+                </span>
+              </CardDescription>
+              <CardAction>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    void loadTrip();
+                  }}
+                  disabled={loading}
+                >
+                  <RefreshCwIcon
+                    data-icon="inline-start"
+                    className={loading ? "animate-spin" : undefined}
+                  />
+                  Refresh
+                </Button>
+              </CardAction>
+            </CardHeader>
+          </Card>
 
           <SharePanel tripId={detail.tripId} api={api} />
 
-          <section className="panel">
-            <div className="panel__header">
-              <h2>Timeline</h2>
-              <div className="trip-detail__add">
-                <button
-                  type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={openCreateFlight}
-                >
-                  + Flight
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={openCreateNote}
-                >
-                  + Note
-                </button>
-              </div>
-            </div>
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>Timeline</CardTitle>
+              <CardDescription>
+                Flights and notes grouped by day in {detail.timezone}.
+              </CardDescription>
+              <CardAction className="flex flex-wrap gap-1.5">
+                <Button type="button" size="sm" onClick={openCreateFlight}>
+                  <PlusIcon data-icon="inline-start" />
+                  Flight
+                </Button>
+                <Button type="button" size="sm" onClick={openCreateNote}>
+                  <PlusIcon data-icon="inline-start" />
+                  Note
+                </Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {editor.kind === "create-flight" ||
+              editor.kind === "edit-flight" ? (
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <FlightForm
+                    key={flightFormKey}
+                    mode={
+                      editor.kind === "create-flight"
+                        ? { kind: "create" }
+                        : { kind: "edit", item: editor.item }
+                    }
+                    tripTimezone={detail.timezone}
+                    submitting={submitting}
+                    error={formError}
+                    onCancel={closeEditor}
+                    onCreate={handleCreate}
+                    onUpdate={handleUpdate}
+                    onEnrichFlight={(query) => api.enrichFlight(query)}
+                  />
+                </div>
+              ) : null}
 
-            {editor.kind === "create-flight" ||
-            editor.kind === "edit-flight" ? (
-              <div className="item-form-wrap">
-                <FlightForm
-                  key={flightFormKey}
-                  mode={
-                    editor.kind === "create-flight"
-                      ? { kind: "create" }
-                      : { kind: "edit", item: editor.item }
-                  }
-                  tripTimezone={detail.timezone}
-                  submitting={submitting}
-                  error={formError}
-                  onCancel={closeEditor}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                  onEnrichFlight={(query) => api.enrichFlight(query)}
-                />
-              </div>
-            ) : null}
+              {editor.kind === "create-note" || editor.kind === "edit-note" ? (
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <NoteForm
+                    key={noteFormKey}
+                    mode={
+                      editor.kind === "create-note"
+                        ? { kind: "create" }
+                        : { kind: "edit", item: editor.item }
+                    }
+                    tripTimezone={detail.timezone}
+                    submitting={submitting}
+                    error={formError}
+                    onCancel={closeEditor}
+                    onCreate={handleCreate}
+                    onUpdate={handleUpdate}
+                  />
+                </div>
+              ) : null}
 
-            {editor.kind === "create-note" || editor.kind === "edit-note" ? (
-              <div className="item-form-wrap">
-                <NoteForm
-                  key={noteFormKey}
-                  mode={
-                    editor.kind === "create-note"
-                      ? { kind: "create" }
-                      : { kind: "edit", item: editor.item }
-                  }
-                  tripTimezone={detail.timezone}
-                  submitting={submitting}
-                  error={formError}
-                  onCancel={closeEditor}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                />
-              </div>
-            ) : null}
+              {buckets !== undefined &&
+              buckets.days.length === 0 &&
+              buckets.unscheduled.length === 0 ? (
+                <Empty className="border border-dashed py-8">
+                  <EmptyHeader>
+                    <EmptyTitle>No items yet</EmptyTitle>
+                    <EmptyDescription>
+                      Add a flight or note to start the timeline.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : null}
 
-            {buckets !== undefined &&
-            buckets.days.length === 0 &&
-            buckets.unscheduled.length === 0 ? (
-              <p className="muted">
-                No items yet. Add a flight or note to start the timeline.
-              </p>
-            ) : null}
+              {buckets !== undefined
+                ? buckets.days.map((day, index) => (
+                    <div key={day.date} className="flex flex-col gap-2">
+                      {index > 0 ? <Separator className="mb-2" /> : null}
+                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                        <span className="text-sm font-medium">
+                          Day {day.dayNumber}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatCivilDateLabel(day.date)}
+                        </span>
+                      </div>
+                      <ItemGroup className="gap-2">
+                        {day.items.map((item) => renderItemCard(item))}
+                      </ItemGroup>
+                    </div>
+                  ))
+                : null}
 
-            {buckets !== undefined
-              ? buckets.days.map((day) => (
-                  <div key={day.date} className="day-bucket">
-                    <header className="day-bucket__header">
-                      <span className="day-bucket__num">Day {day.dayNumber}</span>
-                      <span className="day-bucket__date">
-                        {formatCivilDateLabel(day.date)}
-                      </span>
-                    </header>
-                    <ul className="item-list">
-                      {day.items.map((item) => renderItemCard(item))}
-                    </ul>
+              {buckets !== undefined && buckets.unscheduled.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {buckets.days.length > 0 ? (
+                    <Separator className="mb-2" />
+                  ) : null}
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="text-sm font-medium text-muted-foreground">
+                      Unscheduled
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      No start time
+                    </span>
                   </div>
-                ))
-              : null}
-
-            {buckets !== undefined && buckets.unscheduled.length > 0 ? (
-              <div className="day-bucket day-bucket--unscheduled">
-                <header className="day-bucket__header">
-                  <span className="day-bucket__num">Unscheduled</span>
-                  <span className="day-bucket__date">No start time</span>
-                </header>
-                <ul className="item-list">
-                  {buckets.unscheduled.map((item) => renderItemCard(item))}
-                </ul>
-              </div>
-            ) : null}
-          </section>
+                  <ItemGroup className="gap-2">
+                    {buckets.unscheduled.map((item) => renderItemCard(item))}
+                  </ItemGroup>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
         </>
       ) : null}
     </div>

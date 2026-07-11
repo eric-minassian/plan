@@ -1,3 +1,28 @@
+import { Badge } from "@eric-minassian/design/components/badge";
+import { Button } from "@eric-minassian/design/components/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@eric-minassian/design/components/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@eric-minassian/design/components/empty";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@eric-minassian/design/components/item";
+import { Separator } from "@eric-minassian/design/components/separator";
+import { Spinner } from "@eric-minassian/design/components/spinner";
 import type { ItineraryItem, ShareTripDTO } from "@tripplan/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -5,65 +30,14 @@ import {
   type SharePublicApi,
 } from "../api/client.ts";
 import { formatApiError } from "../api/errors.ts";
+import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { bucketTripItems } from "../timeline/bucket.ts";
+import { formatCivilDateLabel } from "../timeline/datetime.ts";
 import {
-  formatCivilDateLabel,
-  formatInstantInZone,
-} from "../timeline/datetime.ts";
-
-function itemTypeLabel(type: ItineraryItem["type"]): string {
-  switch (type) {
-    case "flight":
-      return "Flight";
-    case "note":
-      return "Note";
-    case "hotel":
-      return "Hotel";
-    case "train":
-      return "Train";
-    case "transport":
-      return "Transport";
-    case "activity":
-      return "Activity";
-    case "ticket":
-      return "Ticket";
-    case "custom":
-      return "Custom";
-  }
-}
-
-function itemSubtitle(
-  item: ItineraryItem,
-  timezone: string,
-): string | undefined {
-  const start = formatInstantInZone(item.startAt, timezone);
-  const end = formatInstantInZone(item.endAt, timezone);
-  if (item.type === "flight") {
-    const route = [
-      item.details.departureAirport,
-      item.details.arrivalAirport,
-    ]
-      .filter((x): x is string => x !== undefined && x.length > 0)
-      .join(" → ");
-    const bits = [
-      item.details.airlineCode !== undefined
-        ? `${item.details.airlineCode}${item.details.flightNumber}`
-        : item.details.flightNumber,
-      route.length > 0 ? route : undefined,
-      start,
-      end !== undefined ? `→ ${end}` : undefined,
-    ].filter((x): x is string => x !== undefined);
-    return bits.join(" · ");
-  }
-  if (item.type === "note") {
-    const body = item.notes?.trim();
-    if (body !== undefined && body.length > 0) {
-      return body.length > 120 ? `${body.slice(0, 117)}…` : body;
-    }
-    return start;
-  }
-  return start;
-}
+  itemSubtitle,
+  itemTypeBadgeVariant,
+  itemTypeLabel,
+} from "../timeline/item-display.ts";
 
 /** Clear capability secret from the address bar (always, success or failure). */
 export function clearShareHash(
@@ -222,114 +196,144 @@ export function ShareViewerPage() {
     const timezone = trip?.timezone ?? "UTC";
     const subtitle = itemSubtitle(item, timezone);
     return (
-      <li key={item.itemId} className="item-card">
-        <div className="item-card__main">
-          <div className="item-card__head">
-            <span className={`item-type item-type--${item.type}`}>
+      <Item key={item.itemId} variant="outline" size="sm">
+        <ItemContent>
+          <ItemTitle className="line-clamp-none flex flex-wrap items-center gap-2">
+            <Badge variant={itemTypeBadgeVariant(item.type)}>
               {itemTypeLabel(item.type)}
-            </span>
-            <span className="item-card__title">{item.title}</span>
-          </div>
+            </Badge>
+            <span>{item.title}</span>
+          </ItemTitle>
           {subtitle !== undefined ? (
-            <p className="item-card__sub">{subtitle}</p>
+            <ItemDescription className="line-clamp-none whitespace-pre-wrap">
+              {subtitle}
+            </ItemDescription>
           ) : null}
-        </div>
-      </li>
+        </ItemContent>
+      </Item>
     );
   }
 
   return (
-    <div className="share-viewer">
-      <section className="panel">
-        <div className="panel__header">
-          <div>
-            <p className="share-viewer__badge">Shared trip · read-only</p>
+    <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader className="border-b">
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline" className="w-fit">
+              Shared trip · read-only
+            </Badge>
             {trip !== undefined ? (
               <>
-                <h2>{trip.title}</h2>
-                <p className="trip-detail__meta muted">
-                  {trip.startDate} → {trip.endDate}
-                  <span className="trip-detail__tz">{trip.timezone}</span>
-                </p>
-                <p className="muted share-viewer__owner">
+                <CardTitle className="text-base">{trip.title}</CardTitle>
+                <CardDescription className="flex flex-wrap gap-x-3 gap-y-0.5">
+                  <span>
+                    {trip.startDate} → {trip.endDate}
+                  </span>
+                  <span className="font-mono text-[0.7rem]">
+                    {trip.timezone}
+                  </span>
+                </CardDescription>
+                <p className="text-sm text-muted-foreground">
                   Shared by {trip.ownerDisplayName}
                 </p>
               </>
             ) : (
-              <h2>Shared trip</h2>
+              <CardTitle className="text-base">Shared trip</CardTitle>
             )}
           </div>
           {trip !== undefined ? (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              disabled={leaving}
-              onClick={() => {
-                void handleLeave();
-              }}
-            >
-              {leaving ? "…" : "Leave share"}
-            </button>
+            <CardAction>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={leaving}
+                onClick={() => {
+                  void handleLeave();
+                }}
+              >
+                {leaving ? "…" : "Leave share"}
+              </Button>
+            </CardAction>
           ) : null}
-        </div>
-        <p className="muted share-viewer__note">
-          Opening another shared trip switches your view — only one share
-          session is active in this browser at a time.
-        </p>
-      </section>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Opening another shared trip switches your view — only one share
+            session is active in this browser at a time.
+          </p>
+        </CardContent>
+      </Card>
 
       {loading ? (
-        <section className="panel">
-          <p className="muted">Loading shared trip…</p>
-        </section>
+        <Card>
+          <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+            <Spinner />
+            Loading shared trip…
+          </CardContent>
+        </Card>
       ) : null}
 
-      {error !== undefined ? (
-        <p className="banner banner--error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error !== undefined ? <ErrorAlert>{error}</ErrorAlert> : null}
 
       {trip !== undefined && !loading ? (
-        <section className="panel">
-          <div className="panel__header">
-            <h2>Timeline</h2>
-          </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Timeline</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {buckets !== undefined &&
+            buckets.days.length === 0 &&
+            buckets.unscheduled.length === 0 ? (
+              <Empty className="border border-dashed py-8">
+                <EmptyHeader>
+                  <EmptyTitle>No items yet</EmptyTitle>
+                  <EmptyDescription>
+                    No items on this trip yet.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
 
-          {buckets !== undefined &&
-          buckets.days.length === 0 &&
-          buckets.unscheduled.length === 0 ? (
-            <p className="muted">No items on this trip yet.</p>
-          ) : null}
+            {buckets !== undefined
+              ? buckets.days.map((day, index) => (
+                  <div key={day.date} className="flex flex-col gap-2">
+                    {index > 0 ? <Separator className="mb-2" /> : null}
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="text-sm font-medium">
+                        Day {day.dayNumber}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {formatCivilDateLabel(day.date)}
+                      </span>
+                    </div>
+                    <ItemGroup className="gap-2">
+                      {day.items.map((item) => renderItemCard(item))}
+                    </ItemGroup>
+                  </div>
+                ))
+              : null}
 
-          {buckets !== undefined
-            ? buckets.days.map((day) => (
-                <div key={day.date} className="day-bucket">
-                  <header className="day-bucket__header">
-                    <span className="day-bucket__num">Day {day.dayNumber}</span>
-                    <span className="day-bucket__date">
-                      {formatCivilDateLabel(day.date)}
-                    </span>
-                  </header>
-                  <ul className="item-list">
-                    {day.items.map((item) => renderItemCard(item))}
-                  </ul>
+            {buckets !== undefined && buckets.unscheduled.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {buckets.days.length > 0 ? (
+                  <Separator className="mb-2" />
+                ) : null}
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Unscheduled
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    No start time
+                  </span>
                 </div>
-              ))
-            : null}
-
-          {buckets !== undefined && buckets.unscheduled.length > 0 ? (
-            <div className="day-bucket day-bucket--unscheduled">
-              <header className="day-bucket__header">
-                <span className="day-bucket__num">Unscheduled</span>
-                <span className="day-bucket__date">No start time</span>
-              </header>
-              <ul className="item-list">
-                {buckets.unscheduled.map((item) => renderItemCard(item))}
-              </ul>
-            </div>
-          ) : null}
-        </section>
+                <ItemGroup className="gap-2">
+                  {buckets.unscheduled.map((item) => renderItemCard(item))}
+                </ItemGroup>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
       ) : null}
     </div>
   );
