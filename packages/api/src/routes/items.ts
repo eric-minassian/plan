@@ -14,7 +14,10 @@ import {
 } from "../http/decode.js";
 import { RequestContext } from "../http/request-context.js";
 import { getHeader, jsonResponse, type HttpResponse } from "../http/types.js";
+import type { AttachmentRepo } from "../repos/attachment-repo.js";
 import { MAX_ITEMS_PER_TRIP, TripRepo } from "../repos/trip-repo.js";
+import type { DocsStore } from "../s3/docs-store.js";
+import { cascadeDeleteItemAttachments } from "./attachments.js";
 
 const ReorderBody = S.Struct({
   itemIds: S.Array(S.String),
@@ -151,11 +154,15 @@ export function handlePatchItem(): Effect.Effect<
   });
 }
 
-/** DELETE /api/v1/trips/:tripId/items/:itemId — delete item (attachments later). */
+/**
+ * DELETE /api/v1/trips/:tripId/items/:itemId
+ * Authorize ownership first, then cascade attachments (DDB+S3), then item row.
+ * Never cascade before ownership — ATT rows are not owner-scoped keys.
+ */
 export function handleDeleteItem(): Effect.Effect<
   HttpResponse,
   AppError,
-  CurrentOwner | TripRepo | RequestContext
+  CurrentOwner | TripRepo | AttachmentRepo | DocsStore | RequestContext
 > {
   return Effect.gen(function* () {
     const principal = yield* CurrentOwner;
@@ -163,6 +170,12 @@ export function handleDeleteItem(): Effect.Effect<
     const { pathParams } = yield* RequestContext;
     const tripId = yield* requirePathParam(pathParams, "tripId");
     const itemId = yield* requirePathParam(pathParams, "itemId");
+    // Fail closed: ownership/item existence before any ATT or S3 mutation.
+    const item = yield* trips.getItem(principal.sub, tripId, itemId);
+    if (item === undefined) {
+      return yield* Effect.fail(AppError.notFound("Item not found"));
+    }
+    yield* cascadeDeleteItemAttachments(tripId, itemId);
     yield* trips.deleteItem(principal.sub, tripId, itemId);
     return { status: 204 };
   });

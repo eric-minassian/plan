@@ -260,29 +260,17 @@ const InstantPatch = S.NullOr(InstantInput);
 /**
  * Update field struct (no `type`). Used after rejecting payloads that include `type`.
  */
-/**
- * Enrichment meta to set, or JSON `null` to clear stored enrichment
- * (e.g. after a failed re-lookup on edit). Omitted ⇒ leave unchanged.
- */
-const EnrichmentPatch = S.NullOr(EnrichmentMeta);
-
-/**
- * GeoPoint to set, or JSON `null` to clear stored location (map pin).
- * Omitted ⇒ leave unchanged.
- */
-const GeoPointPatch = S.NullOr(GeoPoint);
-
 const UpdateItineraryItemFields = S.Struct({
   title: S.optional(Title),
   startAt: S.optional(InstantPatch),
   endAt: S.optional(InstantPatch),
   startTimeZone: S.optional(S.String),
   endTimeZone: S.optional(S.String),
-  startLocation: S.optional(GeoPointPatch),
-  endLocation: S.optional(GeoPointPatch),
+  startLocation: S.optional(GeoPoint),
+  endLocation: S.optional(GeoPoint),
   notes: S.optional(Notes),
   confirmationCode: S.optional(ConfirmationCode),
-  enrichment: S.optional(EnrichmentPatch),
+  enrichment: S.optional(EnrichmentMeta),
   /**
    * Full replace of details for the item's existing type.
    * Prefer {@link decodeUpdateDetails} with the stored item type.
@@ -295,8 +283,7 @@ const UpdateItineraryItemFields = S.Struct({
  * Sending `type` fails decode with message suitable for 400 ValidationError.
  * When `details` is present it must match the existing item type schema
  * (full replace of details, not deep-merge) — use {@link decodeUpdateDetails}.
- * `startAt` / `endAt` / `startLocation` / `endLocation` / `enrichment`:
- * value to set, `null` to clear, omit to leave.
+ * `startAt` / `endAt`: Instant string to set, `null` to clear, omit to leave.
  */
 export const UpdateItineraryItem = S.Unknown.pipe(
   S.filter(

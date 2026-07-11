@@ -1,18 +1,11 @@
 import type {
   CreateItineraryItem,
-  EnrichFlightRequest,
-  EnrichmentMeta,
-  FlightEnrichmentFound,
-  FlightEnrichmentResponse,
-  GeoPoint,
   ItineraryItem,
   UpdateItineraryItem,
 } from "@tripplan/domain";
-import { parseFlightDesignator } from "@tripplan/domain";
 import { Either } from "effect";
 import { useState, type FormEvent } from "react";
 import { decodeCreateItem, decodeUpdateItem } from "../api/decode.ts";
-import { formatApiError } from "../api/errors.ts";
 import {
   instantToWallClockLocal,
   wallClockInZoneToInstant,
@@ -37,13 +30,6 @@ export interface FlightFormProps {
     version: number,
     payload: UpdateItineraryItem,
   ) => Promise<void>;
-  /**
-   * Optional enrichment lookup (suggest-then-confirm). When omitted, lookup UI
-   * is hidden (tests / offline).
-   */
-  readonly onEnrichFlight?: (
-    query: EnrichFlightRequest,
-  ) => Promise<FlightEnrichmentResponse>;
 }
 
 interface FormState {
@@ -53,24 +39,12 @@ interface FormState {
   airlineName: string;
   departureAirport: string;
   arrivalAirport: string;
-  departureTerminal: string;
-  arrivalTerminal: string;
   confirmationCode: string;
   seat: string;
   notes: string;
   startAtLocal: string;
   endAtLocal: string;
-  startTimeZone: string;
-  endTimeZone: string;
-  startLocation: GeoPoint | undefined;
-  endLocation: GeoPoint | undefined;
 }
-
-/** Enrichment intent for save: leave as-is, set meta, or clear stored meta. */
-type EnrichmentIntent =
-  | { readonly kind: "unchanged" }
-  | { readonly kind: "set"; readonly meta: EnrichmentMeta }
-  | { readonly kind: "clear" };
 
 function emptyState(): FormState {
   return {
@@ -80,17 +54,11 @@ function emptyState(): FormState {
     airlineName: "",
     departureAirport: "",
     arrivalAirport: "",
-    departureTerminal: "",
-    arrivalTerminal: "",
     confirmationCode: "",
     seat: "",
     notes: "",
     startAtLocal: "",
     endAtLocal: "",
-    startTimeZone: "",
-    endTimeZone: "",
-    startLocation: undefined,
-    endLocation: undefined,
   };
 }
 
@@ -105,66 +73,17 @@ function stateFromItem(
     airlineName: item.details.airlineName ?? "",
     departureAirport: item.details.departureAirport ?? "",
     arrivalAirport: item.details.arrivalAirport ?? "",
-    departureTerminal: item.details.departureTerminal ?? "",
-    arrivalTerminal: item.details.arrivalTerminal ?? "",
     confirmationCode: item.confirmationCode ?? "",
     seat: item.details.seat ?? "",
     notes: item.notes ?? "",
     startAtLocal: instantToWallClockLocal(item.startAt, tripTimezone),
     endAtLocal: instantToWallClockLocal(item.endAt, tripTimezone),
-    startTimeZone: item.startTimeZone ?? "",
-    endTimeZone: item.endTimeZone ?? "",
-    startLocation: item.startLocation,
-    endLocation: item.endLocation,
   };
 }
 
 function optionalTrim(value: string): string | undefined {
   const t = value.trim();
   return t.length > 0 ? t : undefined;
-}
-
-/**
- * Compose airline code + number for enrich request so re-lookup works after
- * apply sets flightNumber to the numeric portion only.
- */
-export function designatorForLookup(form: {
-  readonly flightNumber: string;
-  readonly airlineCode: string;
-}): string {
-  const fn = form.flightNumber.trim();
-  const code = form.airlineCode.trim().toUpperCase();
-  if (fn.length === 0) {
-    return "";
-  }
-  const parsed = parseFlightDesignator(fn);
-  if (parsed.airlineCode !== undefined) {
-    return parsed.normalized;
-  }
-  if (code.length > 0) {
-    return `${code}${fn.replace(/\s+/g, "")}`.toUpperCase();
-  }
-  return fn;
-}
-
-function geoFromEndpoint(endpoint: {
-  readonly airportIata: string;
-  readonly airportName?: string;
-  readonly lat?: number;
-  readonly lng?: number;
-  readonly timezone?: string;
-}): GeoPoint | undefined {
-  if (endpoint.lat === undefined || endpoint.lng === undefined) {
-    return undefined;
-  }
-  return {
-    lat: endpoint.lat,
-    lng: endpoint.lng,
-    label: endpoint.airportName ?? endpoint.airportIata,
-    ...(endpoint.timezone !== undefined
-      ? { timezone: endpoint.timezone }
-      : {}),
-  };
 }
 
 /**
@@ -191,147 +110,21 @@ function parseOptionalInstant(
   return { ok: true, value: instant };
 }
 
-function applySuggestion(
-  form: FormState,
-  suggestion: FlightEnrichmentFound,
-  tripTimezone: string,
-): FormState {
-  const airlineCode = suggestion.airlineCode ?? form.airlineCode;
-  const flightNumber = suggestion.flightNumber || form.flightNumber;
-  const dep = suggestion.departure.airportIata;
-  const arr = suggestion.arrival.airportIata;
-  const titleBits = [
-    airlineCode.length > 0 ? `${airlineCode}${flightNumber}` : flightNumber,
-    dep.length > 0 && arr.length > 0 ? `${dep} → ${arr}` : undefined,
-  ].filter((x): x is string => x !== undefined && x.length > 0);
-
-  return {
-    ...form,
-    title: form.title.trim().length > 0 ? form.title : titleBits.join(" "),
-    flightNumber,
-    airlineCode,
-    airlineName: suggestion.airlineName ?? form.airlineName,
-    departureAirport: dep,
-    arrivalAirport: arr,
-    departureTerminal: suggestion.departure.terminal ?? form.departureTerminal,
-    arrivalTerminal: suggestion.arrival.terminal ?? form.arrivalTerminal,
-    startAtLocal: instantToWallClockLocal(
-      suggestion.departure.scheduledAt,
-      tripTimezone,
-    ),
-    endAtLocal: instantToWallClockLocal(
-      suggestion.arrival.scheduledAt,
-      tripTimezone,
-    ),
-    startTimeZone:
-      suggestion.departure.timezone ?? form.startTimeZone,
-    endTimeZone: suggestion.arrival.timezone ?? form.endTimeZone,
-    startLocation:
-      geoFromEndpoint(suggestion.departure) ?? form.startLocation,
-    endLocation: geoFromEndpoint(suggestion.arrival) ?? form.endLocation,
-  };
-}
-
 /**
- * Manual flight create / edit form with optional enrichment lookup (PR 11).
+ * Manual flight create / edit form (PR 8b).
  *
  * Parent remounts via `key` when opening a new session — no `useEffect`
  * reset on `mode` object identity.
- * Enrichment never auto-saves; user reviews prefilled fields and clicks Save.
  */
 export function FlightForm(props: FlightFormProps) {
-  const {
-    mode,
-    tripTimezone,
-    submitting,
-    error,
-    onCancel,
-    onCreate,
-    onUpdate,
-    onEnrichFlight,
-  } = props;
+  const { mode, tripTimezone, submitting, error, onCancel, onCreate, onUpdate } =
+    props;
   const [form, setForm] = useState<FormState>(() =>
     mode.kind === "edit"
       ? stateFromItem(mode.item, tripTimezone)
       : emptyState(),
   );
   const [localError, setLocalError] = useState<string | undefined>(undefined);
-  const [lookupDate, setLookupDate] = useState("");
-  const [lookupHint, setLookupHint] = useState("");
-  const [lookupBusy, setLookupBusy] = useState(false);
-  const [lookupMessage, setLookupMessage] = useState<string | undefined>(
-    undefined,
-  );
-  const [enrichmentIntent, setEnrichmentIntent] = useState<EnrichmentIntent>(
-    () =>
-      mode.kind === "edit" && mode.item.enrichment !== undefined
-        ? { kind: "set", meta: mode.item.enrichment }
-        : { kind: "unchanged" },
-  );
-
-  async function onLookup(): Promise<void> {
-    if (onEnrichFlight === undefined) {
-      return;
-    }
-    setLocalError(undefined);
-    setLookupMessage(undefined);
-
-    const designator = designatorForLookup(form);
-    if (designator.length === 0) {
-      setLocalError("Enter a flight number before lookup");
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(lookupDate.trim())) {
-      setLocalError("Lookup date is required (YYYY-MM-DD)");
-      return;
-    }
-
-    const query: EnrichFlightRequest = {
-      flightNumber: designator,
-      date: lookupDate.trim(),
-      ...(optionalTrim(lookupHint) !== undefined
-        ? { departureAirportHint: optionalTrim(lookupHint) }
-        : {}),
-    };
-
-    setLookupBusy(true);
-    try {
-      const result = await onEnrichFlight(query);
-      if (result.status === "not_found") {
-        // Clear stale enrichment on save (edit) so provenance is not a lie.
-        setEnrichmentIntent(
-          mode.kind === "edit" ? { kind: "clear" } : { kind: "unchanged" },
-        );
-        setLookupMessage(
-          "No schedule found for that flight and date. Enter details manually.",
-        );
-        return;
-      }
-
-      setForm((prev) => applySuggestion(prev, result, tripTimezone));
-      setEnrichmentIntent({
-        kind: "set",
-        meta: {
-          provider: result.provider,
-          fetchedAt: result.fetchedAt,
-          ...(result.confidence !== undefined
-            ? { confidence: result.confidence }
-            : {}),
-        },
-      });
-      const cancelled =
-        result.status === "cancelled"
-          ? " Flight is marked cancelled — review before saving."
-          : "";
-      setLookupMessage(
-        `Suggestion applied from ${result.provider}. Review fields and save when ready.${cancelled}`,
-      );
-    } catch (cause) {
-      setLocalError(formatApiError(cause));
-    } finally {
-      setLookupBusy(false);
-    }
-  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -375,8 +168,6 @@ export function FlightForm(props: FlightFormProps) {
     const airlineName = optionalTrim(form.airlineName);
     const departureAirport = optionalTrim(form.departureAirport);
     const arrivalAirport = optionalTrim(form.arrivalAirport);
-    const departureTerminal = optionalTrim(form.departureTerminal);
-    const arrivalTerminal = optionalTrim(form.arrivalTerminal);
     const seat = optionalTrim(form.seat);
     if (airlineCode !== undefined) details["airlineCode"] = airlineCode;
     if (airlineName !== undefined) details["airlineName"] = airlineName;
@@ -386,18 +177,10 @@ export function FlightForm(props: FlightFormProps) {
     if (arrivalAirport !== undefined) {
       details["arrivalAirport"] = arrivalAirport;
     }
-    if (departureTerminal !== undefined) {
-      details["departureTerminal"] = departureTerminal;
-    }
-    if (arrivalTerminal !== undefined) {
-      details["arrivalTerminal"] = arrivalTerminal;
-    }
     if (seat !== undefined) details["seat"] = seat;
 
     const confirmationCode = optionalTrim(form.confirmationCode);
     const notes = optionalTrim(form.notes);
-    const startTimeZone = optionalTrim(form.startTimeZone);
-    const endTimeZone = optionalTrim(form.endTimeZone);
 
     if (mode.kind === "create") {
       const body: Record<string, unknown> = {
@@ -417,21 +200,6 @@ export function FlightForm(props: FlightFormProps) {
       if (notes !== undefined) {
         body["notes"] = notes;
       }
-      if (startTimeZone !== undefined) {
-        body["startTimeZone"] = startTimeZone;
-      }
-      if (endTimeZone !== undefined) {
-        body["endTimeZone"] = endTimeZone;
-      }
-      if (form.startLocation !== undefined) {
-        body["startLocation"] = form.startLocation;
-      }
-      if (form.endLocation !== undefined) {
-        body["endLocation"] = form.endLocation;
-      }
-      if (enrichmentIntent.kind === "set") {
-        body["enrichment"] = enrichmentIntent.meta;
-      }
       const decoded = decodeCreateItem(body);
       if (Either.isLeft(decoded)) {
         setLocalError(decoded.left);
@@ -449,23 +217,6 @@ export function FlightForm(props: FlightFormProps) {
       endAt: endParsed.value,
       confirmationCode: confirmationCode ?? "",
     };
-    if (startTimeZone !== undefined) {
-      patch["startTimeZone"] = startTimeZone;
-    }
-    if (endTimeZone !== undefined) {
-      patch["endTimeZone"] = endTimeZone;
-    }
-    if (form.startLocation !== undefined) {
-      patch["startLocation"] = form.startLocation;
-    }
-    if (form.endLocation !== undefined) {
-      patch["endLocation"] = form.endLocation;
-    }
-    if (enrichmentIntent.kind === "set") {
-      patch["enrichment"] = enrichmentIntent.meta;
-    } else if (enrichmentIntent.kind === "clear") {
-      patch["enrichment"] = null;
-    }
     const decoded = decodeUpdateItem(patch);
     if (Either.isLeft(decoded)) {
       setLocalError(decoded.left);
@@ -475,8 +226,6 @@ export function FlightForm(props: FlightFormProps) {
   }
 
   const displayError = localError ?? error;
-  const busy = submitting || lookupBusy;
-  const lookupDesignatorPreview = designatorForLookup(form);
 
   return (
     <form className="form item-form" onSubmit={(e) => void onSubmit(e)}>
@@ -487,84 +236,6 @@ export function FlightForm(props: FlightFormProps) {
         <p className="banner banner--error" role="alert">
           {displayError}
         </p>
-      ) : null}
-      {lookupMessage !== undefined ? (
-        <p className="banner banner--info" role="status">
-          {lookupMessage}
-        </p>
-      ) : null}
-
-      {onEnrichFlight !== undefined ? (
-        <fieldset className="item-form__lookup" disabled={busy}>
-          <legend className="item-form__lookup-legend">
-            Lookup schedule (optional)
-          </legend>
-          <p className="field__hint">
-            Suggests times and airports from the flight number and date. You
-            always review and save — nothing is written automatically.
-            {lookupDesignatorPreview.length > 0
-              ? ` Lookup uses “${lookupDesignatorPreview}”.`
-              : ""}
-          </p>
-          <div className="form__row">
-            <label className="field">
-              <span className="field__label">Flight number</span>
-              <input
-                className="field__input"
-                type="text"
-                name="lookupFlightNumber"
-                value={form.flightNumber}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, flightNumber: e.target.value }));
-                }}
-                placeholder="UA100"
-                autoComplete="off"
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Date</span>
-              <input
-                className="field__input"
-                type="date"
-                name="lookupDate"
-                value={lookupDate}
-                onChange={(e) => {
-                  setLookupDate(e.target.value);
-                }}
-                required={false}
-              />
-            </label>
-          </div>
-          <div className="form__row">
-            <label className="field">
-              <span className="field__label">From hint (IATA)</span>
-              <input
-                className="field__input"
-                type="text"
-                name="lookupHint"
-                maxLength={3}
-                value={lookupHint}
-                onChange={(e) => {
-                  setLookupHint(e.target.value);
-                }}
-                placeholder="SFO"
-              />
-            </label>
-            <div className="field field--actions">
-              <span className="field__label">&nbsp;</span>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                disabled={busy}
-                onClick={() => {
-                  void onLookup();
-                }}
-              >
-                {lookupBusy ? "Looking up…" : "Lookup"}
-              </button>
-            </div>
-          </div>
-        </fieldset>
       ) : null}
 
       <label className="field">
@@ -658,35 +329,6 @@ export function FlightForm(props: FlightFormProps) {
 
       <div className="form__row">
         <label className="field">
-          <span className="field__label">Dep terminal</span>
-          <input
-            className="field__input"
-            type="text"
-            name="departureTerminal"
-            value={form.departureTerminal}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, departureTerminal: e.target.value }));
-            }}
-            placeholder="3"
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Arr terminal</span>
-          <input
-            className="field__input"
-            type="text"
-            name="arrivalTerminal"
-            value={form.arrivalTerminal}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, arrivalTerminal: e.target.value }));
-            }}
-            placeholder="7"
-          />
-        </label>
-      </div>
-
-      <div className="form__row">
-        <label className="field">
           <span className="field__label">Departure ({tripTimezone})</span>
           <input
             className="field__input"
@@ -712,11 +354,8 @@ export function FlightForm(props: FlightFormProps) {
         </label>
       </div>
       <p className="field__hint">
-        Times are entered in {tripTimezone}
-        {form.startTimeZone.length > 0 || form.endTimeZone.length > 0
-          ? ` (airport zones: ${form.startTimeZone || "—"} → ${form.endTimeZone || "—"})`
-          : ""}
-        . Clear a field to remove that time.
+        Times are in {tripTimezone} (airport-local entry not supported yet).
+        Clear a field to remove that time.
       </p>
 
       <div className="form__row">
@@ -763,7 +402,7 @@ export function FlightForm(props: FlightFormProps) {
       </label>
 
       <div className="form__actions">
-        <button type="submit" className="btn btn--primary" disabled={busy}>
+        <button type="submit" className="btn btn--primary" disabled={submitting}>
           {submitting
             ? "Saving…"
             : mode.kind === "create"
@@ -773,7 +412,7 @@ export function FlightForm(props: FlightFormProps) {
         <button
           type="button"
           className="btn btn--ghost"
-          disabled={busy}
+          disabled={submitting}
           onClick={onCancel}
         >
           Cancel

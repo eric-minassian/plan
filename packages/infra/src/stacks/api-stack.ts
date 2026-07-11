@@ -8,7 +8,8 @@ import {
   OutputFormat,
 } from "aws-cdk-lib/aws-lambda-nodejs";
 import * as logs from "aws-cdk-lib/aws-logs";
-import type * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as iam from "aws-cdk-lib/aws-iam";
+import type * as s3 from "aws-cdk-lib/aws-s3";
 import type { Construct } from "constructs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,19 +23,10 @@ export interface ApiStackProps extends cdk.StackProps {
   readonly stage: Stage;
   /** Single-table DynamoDB from DataStack. */
   readonly table: dynamodb.ITable;
+  /** Documents bucket for presigned attachment PUT/GET. */
+  readonly documentsBucket: s3.IBucket;
   /** Optional log retention from FoundationStack (defaults by stage). */
   readonly logRetention?: logs.RetentionDays;
-  /**
-   * MapTiler server secret (FoundationStack). When set, grants read and injects
-   * `MAPTILER_API_KEY` for live place geocoding. Live flag still defaults off
-   * (`ENRICHMENT_PLACES_LIVE`) until ops enables it.
-   */
-  readonly mapTilerSecret?: secretsmanager.ISecret;
-  /**
-   * AeroDataBox secret (FoundationStack). When set, grants read and injects
-   * `AERODATABOX_API_KEY` / `AERODATABOX_HOST` for live flight enrich.
-   */
-  readonly aeroDataBoxSecret?: secretsmanager.ISecret;
 }
 
 /**
@@ -42,9 +34,9 @@ export interface ApiStackProps extends cdk.StackProps {
  * JWT is verified in-Lambda via `@ericminassian/auth` — no Cognito, no
  * API Gateway JWT authorizer on owner routes.
  *
- * Persistence: `TABLE_NAME` + Dynamo R/W grants enable trip meta CRUD
- * (`USER#ownerId` / `TRIP#tripId` + GSI1). User profile upsert remains
- * in-memory until a Dynamo UserRepository lands.
+ * Persistence: `TABLE_NAME` + Dynamo R/W grants enable trip/item/share/ATT rows.
+ * `DOCS_BUCKET_NAME` + S3 R/W for presigned attachments (HeadObject, tags, delete).
+ * User profile upsert remains in-memory until a Dynamo UserRepository lands.
  */
 export class ApiStack extends cdk.Stack {
   readonly httpApi: apigwv2.HttpApi;
@@ -54,7 +46,7 @@ export class ApiStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
 
-    const { stage, table } = props;
+    const { stage, table, documentsBucket } = props;
     const prod = isProdStage(stage);
     const logRetention =
       props.logRetention ??
@@ -74,23 +66,6 @@ export class ApiStack extends cdk.Stack {
 
     const publicApiBaseUrl = publicApiBaseUrlForStage(stage);
 
-    // Live enrich flags default false (mock). Ops can flip via Lambda env /
-    // parameter after secrets are filled — CDK does not force live on.
-    const secretEnv: Record<string, string> = {};
-    if (props.mapTilerSecret !== undefined) {
-      secretEnv["MAPTILER_API_KEY"] = props.mapTilerSecret
-        .secretValueFromJson("apiKey")
-        .unsafeUnwrap();
-    }
-    if (props.aeroDataBoxSecret !== undefined) {
-      secretEnv["AERODATABOX_API_KEY"] = props.aeroDataBoxSecret
-        .secretValueFromJson("apiKey")
-        .unsafeUnwrap();
-      secretEnv["AERODATABOX_HOST"] = props.aeroDataBoxSecret
-        .secretValueFromJson("host")
-        .unsafeUnwrap();
-    }
-
     this.apiFunction = new NodejsFunction(this, "ApiHandler", {
       functionName: `tripplan-api-${stage}`,
       entry: apiHandlerEntry,
@@ -103,6 +78,7 @@ export class ApiStack extends cdk.Stack {
       logRetention,
       environment: {
         TABLE_NAME: table.tableName,
+        DOCS_BUCKET_NAME: documentsBucket.bucketName,
         AUTH_ISSUER: "https://auth.ericminassian.com",
         AUTH_AUDIENCE: "plan",
         STAGE: stage,
@@ -110,10 +86,6 @@ export class ApiStack extends cdk.Stack {
         ...(publicApiBaseUrl !== undefined
           ? { PUBLIC_API_BASE_URL: publicApiBaseUrl }
           : {}),
-        // Mock-default; set true only after vendor TOS + secret fill.
-        ENRICHMENT_PLACES_LIVE: "false",
-        ENRICHMENT_FLIGHT_LIVE: "false",
-        ...secretEnv,
         NODE_OPTIONS: "--enable-source-maps",
       },
       bundling: {
@@ -127,15 +99,24 @@ export class ApiStack extends cdk.Stack {
         // Keep Effect + auth SDK in the bundle so Lambda has no node_modules layout issues.
         externalModules: ["@aws-sdk/*"],
       },
-      description: `TripPlan HTTP API (${stage}) — health, me, owner trip CRUD`,
+      description: `TripPlan HTTP API (${stage}) — trips, items, shares, attachments`,
     });
 
-    // R/W for trip meta (and future profile) single-table access.
+    // R/W for trip/item/share/ATT single-table access.
     table.grantReadWriteData(this.apiFunction);
-
-    // Server-side enrichment secrets (MapTiler places, AeroDataBox flights).
-    props.mapTilerSecret?.grantRead(this.apiFunction);
-    props.aeroDataBoxSecret?.grantRead(this.apiFunction);
+    // Presign is SigV4 (no IAM on client); Lambda needs HeadObject, tagging, delete.
+    documentsBucket.grantReadWrite(this.apiFunction);
+    // Tagging for pending=true lifecycle (IBucket has no .grant helper).
+    this.apiFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "s3:PutObjectTagging",
+          "s3:GetObjectTagging",
+          "s3:DeleteObjectTagging",
+        ],
+        resources: [documentsBucket.arnForObjects("*")],
+      }),
+    );
 
     this.httpApi = new apigwv2.HttpApi(this, "HttpApi", {
       apiName: `tripplan-${stage}`,
