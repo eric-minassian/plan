@@ -26,6 +26,7 @@ import {
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { BusyIcon } from "../components/BusyIcon.tsx";
+import { BusyStatus } from "../components/BusyStatus.tsx";
 import { useAuth } from "@ericminassian/auth/react";
 import type { Trip } from "@tripplan/domain";
 import { Either } from "effect";
@@ -217,10 +218,9 @@ export function TripListPage() {
           {listError !== undefined ? <ErrorAlert>{listError}</ErrorAlert> : null}
 
           {loading ? (
-            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-              <BusyIcon />
+            <BusyStatus className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
               Loading trips…
-            </div>
+            </BusyStatus>
           ) : trips.length === 0 ? (
             <Empty className="border border-dashed py-8">
               <EmptyHeader>

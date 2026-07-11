@@ -21,7 +21,7 @@ import {
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Separator } from "@eric-minassian/design/components/separator";
-import { BusyIcon } from "../components/BusyIcon.tsx";
+import { BusyStatus } from "../components/BusyStatus.tsx";
 import type { ItineraryItem, ShareTripDTO } from "@tripplan/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -267,9 +267,10 @@ export function ShareViewerPage() {
 
       {loading ? (
         <Card>
-          <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <BusyIcon />
-            Loading shared trip…
+          <CardContent className="py-6">
+            <BusyStatus className="flex items-center gap-2 text-sm text-muted-foreground">
+              Loading shared trip…
+            </BusyStatus>
           </CardContent>
         </Card>
       ) : null}

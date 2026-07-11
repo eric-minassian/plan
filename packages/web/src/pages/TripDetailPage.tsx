@@ -22,7 +22,7 @@ import {
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Separator } from "@eric-minassian/design/components/separator";
-import { BusyIcon } from "../components/BusyIcon.tsx";
+import { BusyStatus } from "../components/BusyStatus.tsx";
 import { useAuth } from "@ericminassian/auth/react";
 import type {
   CreateItineraryItem,
@@ -409,9 +409,10 @@ export function TripDetailPage() {
 
       {loading && detail === undefined ? (
         <Card>
-          <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <BusyIcon />
-            Loading trip…
+          <CardContent className="py-6">
+            <BusyStatus className="flex items-center gap-2 text-sm text-muted-foreground">
+              Loading trip…
+            </BusyStatus>
           </CardContent>
         </Card>
       ) : null}
