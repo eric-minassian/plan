@@ -7,13 +7,14 @@ import { AppShell } from "./components/AppShell.tsx";
 import { ProtectedRoute } from "./components/ProtectedRoute.tsx";
 import type { AppConfig } from "./config.ts";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage.tsx";
+import { TripDetailPage } from "./pages/TripDetailPage.tsx";
 import { TripListPage } from "./pages/TripListPage.tsx";
 
 export interface AppProps {
   readonly config: AppConfig;
 }
 
-/** TripPlan SPA root: auth, routing, trip list/create (PR 8a). */
+/** TripPlan SPA root: auth, trip list, day timeline (PR 8a/8b). */
 export function App({ config }: AppProps) {
   const authClient = useMemo(() => createWebAuthClient(config), [config]);
 
@@ -29,6 +30,14 @@ export function App({ config }: AppProps) {
                 element={
                   <ProtectedRoute>
                     <TripListPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/trips/:tripId"
+                element={
+                  <ProtectedRoute>
+                    <TripDetailPage />
                   </ProtectedRoute>
                 }
               />

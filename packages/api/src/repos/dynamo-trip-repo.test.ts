@@ -12,10 +12,14 @@ import { Effect, Either } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   accumulateActivePage,
+  domainItemToDynamo,
+  dynamoItemToDomain,
   encodeCursor,
+  itemSk,
   itemToTrip,
   makeDynamoTripRepo,
   parseListCursor,
+  tripItemsPk,
   tripSk,
   userPk,
   type TripItem,
@@ -397,5 +401,89 @@ describe("itemToTrip", () => {
     const t = itemToTrip(tripItem("o", "x"));
     expect(t.tripId).toBe("x");
     expect(t.ownerId).toBe("o");
+  });
+});
+
+describe("domainItemToDynamo / dynamoItemToDomain", () => {
+  it("round-trips note item with SK=ITEM#itemId and sortKey attribute", () => {
+    const domain = {
+      itemId: "item-1",
+      tripId: "trip-1",
+      type: "note" as const,
+      title: "Hello",
+      details: {},
+      sortKey: 2000,
+      version: 1,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+      notes: "body",
+    };
+    const row = domainItemToDynamo("owner-1", domain);
+    expect(row.PK).toBe(tripItemsPk("trip-1"));
+    expect(row.SK).toBe(itemSk("item-1"));
+    expect(row.SK).toBe("ITEM#item-1");
+    expect(row.sortKey).toBe(2000);
+    expect(row.ownerId).toBe("owner-1");
+    expect(row.entityType).toBe("ITEM");
+    const back = dynamoItemToDomain(row);
+    expect(back.itemId).toBe("item-1");
+    expect(back.sortKey).toBe(2000);
+    expect(back.type).toBe("note");
+    expect(back.notes).toBe("body");
+  });
+});
+
+describe("buildItemPatchUpdateExpression never writes sortKey", () => {
+  it("SET expression omits sortKey", async () => {
+    const { buildItemPatchUpdateExpression } = await import("./item-build.js");
+    const existing = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "note" as const,
+      title: "Old",
+      details: {},
+      sortKey: 5000,
+      version: 1,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+    };
+    const parts = buildItemPatchUpdateExpression(
+      existing,
+      { title: "New" },
+      1,
+      "2026-07-10T13:00:00Z",
+    );
+    expect(parts.updateExpression).toContain("title = :title");
+    expect(parts.updateExpression).not.toMatch(/sortKey/i);
+    expect(Object.keys(parts.expressionAttributeValues).join(",")).not.toMatch(
+      /sortKey/i,
+    );
+    expect(parts.newVersion).toBe(2);
+  });
+
+  it("null startAt/endAt emit REMOVE clauses", async () => {
+    const { buildItemPatchUpdateExpression } = await import("./item-build.js");
+    const existing = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "note" as const,
+      title: "Old",
+      startAt: "2026-06-01T10:00:00Z",
+      endAt: "2026-06-01T12:00:00Z",
+      details: {},
+      sortKey: 1000,
+      version: 1,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+    };
+    const parts = buildItemPatchUpdateExpression(
+      existing,
+      { startAt: null, endAt: null },
+      1,
+      "2026-07-10T13:00:00Z",
+    );
+    expect(parts.updateExpression).toMatch(/REMOVE startAt, endAt|REMOVE endAt, startAt/);
+    expect(parts.updateExpression).not.toContain(":startAt");
+    expect(parts.updateExpression).not.toContain(":endAt");
   });
 });

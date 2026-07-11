@@ -143,4 +143,113 @@ describe("createTripPlanApi", () => {
       }),
     ).rejects.toThrow(/Invalid trip response/);
   });
+
+  it("decodes get trip detail with items", async () => {
+    const note = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "note" as const,
+      title: "Pack",
+      notes: "socks",
+      details: {},
+      sortKey: 1000,
+      version: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const fetchWithAuth = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ...sampleTrip, items: [note] }), {
+          status: 200,
+        }),
+    );
+    const api = createTripPlanApi(mockAuth(fetchWithAuth));
+    const detail = await api.getTrip("t1");
+    expect(detail.items).toHaveLength(1);
+    expect(detail.items[0]?.type).toBe("note");
+    expect(fetchWithAuth).toHaveBeenCalledWith(
+      "https://plan.ericminassian.com/api/v1/trips/t1",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("creates an item with JSON body and optional Idempotency-Key", async () => {
+    const flight = {
+      itemId: "i2",
+      tripId: "t1",
+      type: "flight" as const,
+      title: "UA 100",
+      details: { flightNumber: "100", airlineCode: "UA" },
+      sortKey: 1000,
+      version: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const fetchWithAuth = vi.fn(
+      async () => new Response(JSON.stringify(flight), { status: 201 }),
+    );
+    const api = createTripPlanApi(mockAuth(fetchWithAuth));
+    const created = await api.createItem(
+      "t1",
+      {
+        type: "flight",
+        title: "UA 100",
+        details: { flightNumber: "100", airlineCode: "UA" },
+      },
+      { idempotencyKey: "session-1" },
+    );
+    expect(created.itemId).toBe("i2");
+    expect(fetchWithAuth).toHaveBeenCalledWith(
+      "https://plan.ericminassian.com/api/v1/trips/t1/items",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "Idempotency-Key": "session-1",
+        }),
+      }),
+    );
+  });
+
+  it("patches item with If-Match", async () => {
+    const note = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "note" as const,
+      title: "Updated",
+      notes: "x",
+      details: {},
+      sortKey: 1000,
+      version: 2,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-02T00:00:00Z",
+    };
+    const fetchWithAuth = vi.fn(
+      async () => new Response(JSON.stringify(note), { status: 200 }),
+    );
+    const api = createTripPlanApi(mockAuth(fetchWithAuth));
+    const updated = await api.updateItem("t1", "i1", 1, { title: "Updated" });
+    expect(updated.version).toBe(2);
+    expect(fetchWithAuth).toHaveBeenCalledWith(
+      "https://plan.ericminassian.com/api/v1/trips/t1/items/i1",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({
+          "If-Match": '"1"',
+        }),
+      }),
+    );
+  });
+
+  it("deletes item with empty 204 body", async () => {
+    const fetchWithAuth = vi.fn(
+      async () => new Response(null, { status: 204 }),
+    );
+    const api = createTripPlanApi(mockAuth(fetchWithAuth));
+    await expect(api.deleteItem("t1", "i1")).resolves.toBeUndefined();
+    expect(fetchWithAuth).toHaveBeenCalledWith(
+      "https://plan.ericminassian.com/api/v1/trips/t1/items/i1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
 });
