@@ -15,11 +15,21 @@ export interface HttpRequest {
   readonly cookies: Readonly<Record<string, string>>;
   readonly body: string | undefined;
   readonly requestId: string;
+  /**
+   * Client IP for rate limiting (APIGW sourceIp). Defaults to "unknown"
+   * when not available (unit tests).
+   */
+  readonly clientIp: string;
 }
 
 export interface HttpResponse {
   readonly status: number;
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * Full Set-Cookie header values (without the "Set-Cookie:" prefix).
+   * Mapped to API Gateway HTTP API `cookies` array.
+   */
+  readonly cookies?: readonly string[];
   readonly body?: string;
 }
 

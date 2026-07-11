@@ -18,10 +18,9 @@ import {
 } from "../api/client.ts";
 import { ApiClientError, formatApiError } from "../api/errors.ts";
 import { useAuthClient } from "../auth/AuthClientContext.tsx";
-import { ActivityForm } from "../components/ActivityForm.tsx";
 import { FlightForm } from "../components/FlightForm.tsx";
-import { HotelForm } from "../components/HotelForm.tsx";
 import { NoteForm } from "../components/NoteForm.tsx";
+import { SharePanel } from "../components/SharePanel.tsx";
 import { bucketTripItems } from "../timeline/bucket.ts";
 import {
   formatCivilDateLabel,
@@ -40,28 +39,12 @@ type EditorState =
       readonly sessionId: string;
     }
   | {
-      readonly kind: "create-hotel";
-      readonly sessionId: string;
-    }
-  | {
-      readonly kind: "create-activity";
-      readonly sessionId: string;
-    }
-  | {
       readonly kind: "edit-flight";
       readonly item: Extract<ItineraryItem, { readonly type: "flight" }>;
     }
   | {
       readonly kind: "edit-note";
       readonly item: Extract<ItineraryItem, { readonly type: "note" }>;
-    }
-  | {
-      readonly kind: "edit-hotel";
-      readonly item: Extract<ItineraryItem, { readonly type: "hotel" }>;
-    }
-  | {
-      readonly kind: "edit-activity";
-      readonly item: Extract<ItineraryItem, { readonly type: "activity" }>;
     };
 
 function newSessionId(): string {
@@ -119,54 +102,11 @@ function itemSubtitle(
     }
     return start;
   }
-  if (item.type === "hotel") {
-    const bits = [
-      item.details.propertyName,
-      item.details.address,
-      start,
-      end !== undefined ? `→ ${end}` : undefined,
-    ].filter((x): x is string => x !== undefined && x.length > 0);
-    return bits.length > 0 ? bits.join(" · ") : undefined;
-  }
-  if (item.type === "activity") {
-    const bits = [
-      item.details.venueName,
-      item.details.category,
-      start,
-      end !== undefined ? `→ ${end}` : undefined,
-    ].filter((x): x is string => x !== undefined && x.length > 0);
-    return bits.length > 0 ? bits.join(" · ") : undefined;
-  }
   return start;
 }
 
 function hasConfirmation(item: ItineraryItem): boolean {
   return (item.confirmationCode ?? "").trim().length > 0;
-}
-
-/**
- * Centroid of item start/end locations for place-search proximity bias.
- * Returns undefined when the trip has no geo yet.
- */
-export function tripPlaceProximity(
-  items: readonly ItineraryItem[],
-): { readonly lat: number; readonly lng: number } | undefined {
-  let latSum = 0;
-  let lngSum = 0;
-  let count = 0;
-  for (const item of items) {
-    for (const loc of [item.startLocation, item.endLocation]) {
-      if (loc !== undefined) {
-        latSum += loc.lat;
-        lngSum += loc.lng;
-        count += 1;
-      }
-    }
-  }
-  if (count === 0) {
-    return undefined;
-  }
-  return { lat: latSum / count, lng: lngSum / count };
 }
 
 /** Trip detail: day-grouped timeline + flight/note editors (PR 8b). */
@@ -241,13 +181,6 @@ export function TripDetailPage() {
     );
   }, [detail]);
 
-  const placeProximity = useMemo(() => {
-    if (detail === undefined) {
-      return undefined;
-    }
-    return tripPlaceProximity(detail.items);
-  }, [detail]);
-
   function closeEditor(): void {
     setEditor({ kind: "closed" });
     setFormError(undefined);
@@ -261,16 +194,6 @@ export function TripDetailPage() {
   function openCreateNote(): void {
     setFormError(undefined);
     setEditor({ kind: "create-note", sessionId: newSessionId() });
-  }
-
-  function openCreateHotel(): void {
-    setFormError(undefined);
-    setEditor({ kind: "create-hotel", sessionId: newSessionId() });
-  }
-
-  function openCreateActivity(): void {
-    setFormError(undefined);
-    setEditor({ kind: "create-activity", sessionId: newSessionId() });
   }
 
   function upsertItem(item: ItineraryItem): void {
@@ -320,10 +243,6 @@ export function TripDetailPage() {
       setEditor({ kind: "edit-flight", item: live });
     } else if (live.type === "note") {
       setEditor({ kind: "edit-note", item: live });
-    } else if (live.type === "hotel") {
-      setEditor({ kind: "edit-hotel", item: live });
-    } else if (live.type === "activity") {
-      setEditor({ kind: "edit-activity", item: live });
     } else {
       closeEditor();
     }
@@ -337,10 +256,7 @@ export function TripDetailPage() {
       return;
     }
     const sessionId =
-      editor.kind === "create-flight" ||
-      editor.kind === "create-note" ||
-      editor.kind === "create-hotel" ||
-      editor.kind === "create-activity"
+      editor.kind === "create-flight" || editor.kind === "create-note"
         ? editor.sessionId
         : newSessionId();
     setSubmitting(true);
@@ -400,10 +316,7 @@ export function TripDetailPage() {
       await api.deleteItem(tripId, item.itemId);
       removeItem(item.itemId);
       if (
-        (editor.kind === "edit-flight" ||
-          editor.kind === "edit-note" ||
-          editor.kind === "edit-hotel" ||
-          editor.kind === "edit-activity") &&
+        (editor.kind === "edit-flight" || editor.kind === "edit-note") &&
         editor.item.itemId === item.itemId
       ) {
         closeEditor();
@@ -423,24 +336,12 @@ export function TripDetailPage() {
     }
     if (item.type === "note") {
       setEditor({ kind: "edit-note", item });
-      return;
-    }
-    if (item.type === "hotel") {
-      setEditor({ kind: "edit-hotel", item });
-      return;
-    }
-    if (item.type === "activity") {
-      setEditor({ kind: "edit-activity", item });
     }
   }
 
   function renderItemCard(item: ItineraryItem) {
     const timezone = detail?.timezone ?? "UTC";
-    const editable =
-      item.type === "flight" ||
-      item.type === "note" ||
-      item.type === "hotel" ||
-      item.type === "activity";
+    const editable = item.type === "flight" || item.type === "note";
     const subtitle = itemSubtitle(item, timezone);
     return (
       <li key={item.itemId} className="item-card">
@@ -513,18 +414,6 @@ export function TripDetailPage() {
       : editor.kind === "edit-note"
         ? `edit-note-${editor.item.itemId}-v${String(editor.item.version)}`
         : undefined;
-  const hotelFormKey =
-    editor.kind === "create-hotel"
-      ? `create-hotel-${editor.sessionId}`
-      : editor.kind === "edit-hotel"
-        ? `edit-hotel-${editor.item.itemId}-v${String(editor.item.version)}`
-        : undefined;
-  const activityFormKey =
-    editor.kind === "create-activity"
-      ? `create-activity-${editor.sessionId}`
-      : editor.kind === "edit-activity"
-        ? `edit-activity-${editor.item.itemId}-v${String(editor.item.version)}`
-        : undefined;
 
   return (
     <div className="trip-detail">
@@ -570,6 +459,8 @@ export function TripDetailPage() {
             </div>
           </section>
 
+          <SharePanel tripId={detail.tripId} api={api} />
+
           <section className="panel">
             <div className="panel__header">
               <h2>Timeline</h2>
@@ -580,20 +471,6 @@ export function TripDetailPage() {
                   onClick={openCreateFlight}
                 >
                   + Flight
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={openCreateHotel}
-                >
-                  + Hotel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={openCreateActivity}
-                >
-                  + Activity
                 </button>
                 <button
                   type="button"
@@ -621,50 +498,6 @@ export function TripDetailPage() {
                   onCancel={closeEditor}
                   onCreate={handleCreate}
                   onUpdate={handleUpdate}
-                  onEnrichFlight={(query) => api.enrichFlight(query)}
-                />
-              </div>
-            ) : null}
-
-            {editor.kind === "create-hotel" || editor.kind === "edit-hotel" ? (
-              <div className="item-form-wrap">
-                <HotelForm
-                  key={hotelFormKey}
-                  mode={
-                    editor.kind === "create-hotel"
-                      ? { kind: "create" }
-                      : { kind: "edit", item: editor.item }
-                  }
-                  tripTimezone={detail.timezone}
-                  submitting={submitting}
-                  error={formError}
-                  onCancel={closeEditor}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                  onEnrichPlace={(query) => api.enrichPlace(query)}
-                  placeProximity={placeProximity}
-                />
-              </div>
-            ) : null}
-
-            {editor.kind === "create-activity" ||
-            editor.kind === "edit-activity" ? (
-              <div className="item-form-wrap">
-                <ActivityForm
-                  key={activityFormKey}
-                  mode={
-                    editor.kind === "create-activity"
-                      ? { kind: "create" }
-                      : { kind: "edit", item: editor.item }
-                  }
-                  tripTimezone={detail.timezone}
-                  submitting={submitting}
-                  error={formError}
-                  onCancel={closeEditor}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                  onEnrichPlace={(query) => api.enrichPlace(query)}
-                  placeProximity={placeProximity}
                 />
               </div>
             ) : null}
@@ -692,8 +525,7 @@ export function TripDetailPage() {
             buckets.days.length === 0 &&
             buckets.unscheduled.length === 0 ? (
               <p className="muted">
-                No items yet. Add a flight, hotel, activity, or note to start
-                the timeline.
+                No items yet. Add a flight or note to start the timeline.
               </p>
             ) : null}
 

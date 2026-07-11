@@ -252,35 +252,4 @@ describe("createTripPlanApi", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
   });
-
-  it("searches places via enrich/place", async () => {
-    const body = {
-      status: "found",
-      results: [
-        {
-          placeId: "poi.1",
-          label: "Louvre Museum",
-          address: "Rue de Rivoli, Paris",
-          lat: 48.8606,
-          lng: 2.3376,
-        },
-      ],
-      provider: "mock",
-      fetchedAt: "2026-07-11T12:00:00Z",
-    };
-    const fetchWithAuth = vi.fn(
-      async () => new Response(JSON.stringify(body), { status: 200 }),
-    );
-    const api = createTripPlanApi(mockAuth(fetchWithAuth));
-    const result = await api.enrichPlace({ query: "Louvre", limit: 5 });
-    expect(result.status).toBe("found");
-    expect(result.results[0]?.label).toBe("Louvre Museum");
-    expect(fetchWithAuth).toHaveBeenCalledWith(
-      "https://plan.ericminassian.com/api/v1/enrich/place",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ query: "Louvre", limit: 5 }),
-      }),
-    );
-  });
 });

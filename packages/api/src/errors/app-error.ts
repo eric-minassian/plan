@@ -62,39 +62,16 @@ export class AppError extends Data.TaggedError("AppError")<{
     return new AppError({ type: ErrorCode.Conflict, message, details });
   }
 
-  static rateLimited(
-    message = "Rate limit exceeded",
-    details?: unknown,
-  ): AppError {
+  /** Trip deleted/deleting — share viewers get 410 Gone. */
+  static gone(message = "Trip is no longer available"): AppError {
+    return new AppError({ type: ErrorCode.Gone, message });
+  }
+
+  static rateLimited(message = "Too many requests"): AppError {
     return new AppError({
       type: ErrorCode.RateLimited,
       message,
-      details,
       retryable: true,
-    });
-  }
-
-  static upstreamUnavailable(
-    message = "Upstream service unavailable",
-    details?: unknown,
-  ): AppError {
-    return new AppError({
-      type: ErrorCode.UpstreamUnavailable,
-      message,
-      details,
-      retryable: true,
-    });
-  }
-
-  static ambiguousEnrichment(
-    message: string,
-    details?: unknown,
-  ): AppError {
-    return new AppError({
-      type: ErrorCode.AmbiguousEnrichment,
-      message,
-      details,
-      retryable: false,
     });
   }
 

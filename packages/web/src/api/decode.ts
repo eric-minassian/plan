@@ -1,16 +1,18 @@
 import {
   CreateItineraryItem,
+  CreateShareResponse,
   CreateTrip,
-  FlightEnrichmentResponse,
   ItineraryItem,
-  PlaceEnrichmentResponse,
+  ShareListResponse,
+  ShareTripDTO,
   Trip,
   UpdateItineraryItem,
   type CreateItineraryItem as CreateItineraryItemInput,
+  type CreateShareResponse as CreateShareResponseType,
   type CreateTrip as CreateTripInput,
-  type FlightEnrichmentResponse as FlightEnrichmentResponseType,
   type ItineraryItem as ItineraryItemType,
-  type PlaceEnrichmentResponse as PlaceEnrichmentResponseType,
+  type ShareListResponse as ShareListResponseType,
+  type ShareTripDTO as ShareTripDTOType,
   type Trip as TripType,
   type UpdateItineraryItem as UpdateItineraryItemInput,
 } from "@tripplan/domain";
@@ -135,33 +137,46 @@ export function decodeItemResponse(
   return decoded.right;
 }
 
-/** Decode flight enrichment DTO (found / cancelled / not_found). */
-export function decodeFlightEnrichmentResponse(
+export function decodeCreateShareResponse(
   json: unknown,
   status: number,
-): FlightEnrichmentResponseType {
-  const decoded = S.decodeUnknownEither(FlightEnrichmentResponse)(json);
+): CreateShareResponseType {
+  const decoded = S.decodeUnknownEither(CreateShareResponse)(json);
   if (Either.isLeft(decoded)) {
     throw new ApiClientError(
       status,
       undefined,
-      `Invalid flight enrichment response: ${schemaIssues(decoded.left)}`,
+      `Invalid create share response: ${schemaIssues(decoded.left)}`,
     );
   }
   return decoded.right;
 }
 
-/** Decode place enrichment DTO (found / not_found with results). */
-export function decodePlaceEnrichmentResponse(
+export function decodeShareListResponse(
   json: unknown,
   status: number,
-): PlaceEnrichmentResponseType {
-  const decoded = S.decodeUnknownEither(PlaceEnrichmentResponse)(json);
+): ShareListResponseType {
+  const decoded = S.decodeUnknownEither(ShareListResponse)(json);
   if (Either.isLeft(decoded)) {
     throw new ApiClientError(
       status,
       undefined,
-      `Invalid place enrichment response: ${schemaIssues(decoded.left)}`,
+      `Invalid share list response: ${schemaIssues(decoded.left)}`,
+    );
+  }
+  return decoded.right;
+}
+
+export function decodeShareTripResponse(
+  json: unknown,
+  status: number,
+): ShareTripDTOType {
+  const decoded = S.decodeUnknownEither(ShareTripDTO)(json);
+  if (Either.isLeft(decoded)) {
+    throw new ApiClientError(
+      status,
+      undefined,
+      `Invalid share trip response: ${schemaIssues(decoded.left)}`,
     );
   }
   return decoded.right;

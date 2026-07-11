@@ -21,6 +21,7 @@ function baseRequest(partial: Partial<HttpRequest> & Pick<HttpRequest, "method" 
     cookies: partial.cookies ?? {},
     body: partial.body,
     requestId: partial.requestId ?? "test-request-id",
+    clientIp: partial.clientIp ?? "127.0.0.1",
   };
 }
 
@@ -33,23 +34,15 @@ function emptyRepos() {
 }
 
 describe("authz matrix", () => {
-  it("exposes health as public and me/trips/enrich as owner", () => {
+  it("exposes health as public and me/trips as owner", () => {
     const health = routes.find((r) => r.path === "/api/v1/health");
     const me = routes.find((r) => r.path === "/api/v1/me");
     const listTrips = routes.find(
       (r) => r.method === "GET" && r.path === "/api/v1/trips",
     );
-    const enrichFlight = routes.find(
-      (r) => r.method === "POST" && r.path === "/api/v1/enrich/flight",
-    );
-    const enrichPlace = routes.find(
-      (r) => r.method === "POST" && r.path === "/api/v1/enrich/place",
-    );
     expect(health?.authClass).toBe("public");
     expect(me?.authClass).toBe("owner");
     expect(listTrips?.authClass).toBe("owner");
-    expect(enrichFlight?.authClass).toBe("owner");
-    expect(enrichPlace?.authClass).toBe("owner");
   });
 
   it("GET /api/v1/health succeeds without owner auth", async () => {
@@ -158,19 +151,34 @@ describe("authz matrix", () => {
     }
   });
 
-  it("share auth stub rejects cookie until revalidation lands", async () => {
+  it("share auth stub rejects cookie without revalidation store", async () => {
     const share = makeShareAuthStub(() => "session-abc");
     const result = await Effect.runPromise(
       Effect.either(share.requireShare()),
     );
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
-      expect(result.left.message).toMatch(/not implemented/i);
+      expect(result.left.type).toBe("Unauthorized");
     }
   });
 
   it("share cookie name is tripplan_share", () => {
     expect(SHARE_COOKIE_NAME).toBe("tripplan_share");
+  });
+
+  it("registers share session and share trip routes", () => {
+    const session = routes.find(
+      (r) => r.method === "POST" && r.path === "/api/v1/share/session",
+    );
+    const trip = routes.find(
+      (r) => r.method === "GET" && r.path === "/api/v1/share/trip",
+    );
+    const del = routes.find(
+      (r) => r.method === "DELETE" && r.path === "/api/v1/share/session",
+    );
+    expect(session?.authClass).toBe("public");
+    expect(trip?.authClass).toBe("share");
+    expect(del?.authClass).toBe("share");
   });
 
   it("wrong method on known path returns 405 with Allow", async () => {
