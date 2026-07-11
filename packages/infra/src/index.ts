@@ -11,6 +11,9 @@ export {
   type FoundationStackProps,
 } from "./stacks/foundation-stack.js";
 export {
+  API_5XX_MIN_REQUESTS,
+  API_P95_ALARM_THRESHOLD_MS,
+  API_P95_DESIGN_TARGET_MS,
   ObservabilityStack,
   TRIPPLAN_METRIC_NAMESPACE,
   type ObservabilityStackProps,

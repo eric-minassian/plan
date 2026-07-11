@@ -12,7 +12,8 @@ Stop third-party spend without stranding owners — mock / degraded enrich UX is
 
 1. **Confirm the metric**
    - Alarm threshold (ObservabilityStack): **prod $25/day**, **non-prod $5/day** (sum of `EnrichmentEstimatedCostUsd`).
-   - Until enrich routes emit EMF, the metric may be missing (alarm treats missing as **not breaching**). Cross-check vendor dashboards if the app metric is not live yet.
+   - **Until enrich routes emit EMF, the metric is missing and the alarm is permanently OK** — the CloudWatch dashboard “metric readiness” panel states this. Do not treat a green enrichment alarm as proof of spend protection.
+   - Cross-check vendor dashboards (RapidAPI / MapTiler) if the app metric is not live yet.
 
 2. **Turn off live providers**
    - Set feature flag / config: `enrichment.flight.live=false` (mock or static airports only).

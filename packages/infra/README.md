@@ -9,7 +9,7 @@ AWS CDK (v2) infrastructure for TripPlan. **All stacks deploy to `us-east-1`.**
 | **FoundationStack** | `TripPlan-Foundation-{stage}` | CloudWatch log retention defaults; Secrets Manager placeholders (AeroDataBox, MapTiler server key) |
 | **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle); **PITR on prod** |
 | **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; routes `GET /api/v1/health` (public), `GET /api/v1/me` (owner JWT in-Lambda); env `TABLE_NAME` / `AUTH_ISSUER` / `AUTH_AUDIENCE` / `STAGE` / `PUBLIC_API_BASE_URL` (prod/staging). **Profile store is still in-memory** until Dynamo `UserRepository` lands — table R/W grant is preparatory. CORS: prod/staging SPA host only; localhost only on dev. |
-| **ObservabilityStack** | `TripPlan-Observability-{stage}` | CloudWatch dashboard + alarms (API 5xx rate, Lambda p95 latency, enrichment $ custom metric); AWS Budgets monthly cost; SNS alarm topic; WAFv2 REGIONAL WebACL (rate-based) associated to HTTP API `$default`; runbook links on the dashboard |
+| **ObservabilityStack** | `TripPlan-Observability-{stage}` | CloudWatch dashboard + alarms (API 5xx rate w/ min volume, Lambda p95 latency, enrichment $ custom metric); **prod-only** AWS Budgets (Project+Stage tag filters); SNS alarm topic; WAFv2 REGIONAL WebACL (rate-based + managed CRS in count) on HTTP API `$default`; runbook paths / absolute links |
 
 **Not in this package yet:** WebStack (CloudFront SPA).  
 **Never planned:** Cognito / AuthStack — owner auth is external OIDC ([eric-minassian/auth](https://github.com/eric-minassian/auth)).
@@ -37,15 +37,27 @@ pnpm synth
 
 # Explicit stage (allowed: dev | staging | prod — anything else fails synth)
 pnpm exec cdk synth -c stage=dev
-pnpm exec cdk synth -c stage=prod
 
-# Optional: email for AWS Budgets notifications + SNS alarm subscription
+# Prod REQUIRES alertEmail (synth fails without it)
 pnpm exec cdk synth -c stage=prod -c alertEmail=ops@example.com
+
+# Optional: absolute runbook links on the CloudWatch dashboard text widgets
+pnpm exec cdk synth -c stage=dev \
+  -c runbookBaseUrl=https://github.com/org/tripplan/blob/main/packages/infra/runbooks
 
 # Deploy / destroy (all stacks in this app)
 pnpm exec cdk deploy --all -c stage=dev
 pnpm exec cdk destroy --all -c stage=dev
 ```
+
+### Prod deploy checklist
+
+1. `-c stage=prod -c alertEmail=…` (required — confirms SNS subscription + budget email).
+2. Confirm SNS email subscription in inbox (opt-in link) after first deploy.
+3. Billing console: activate cost allocation tags **`Project`** and **`Stage`** so the prod monthly budget filter works (otherwise tagged filter may under-count).
+4. Optional: `-c runbookBaseUrl=https://…/packages/infra/runbooks` so dashboard runbook links are clickable.
+5. After traffic: confirm `AWS/ApiGateway` graphs use `ApiId` + `Stage=$default`; WAF panels show Allowed/Blocked.
+6. PITR: `aws dynamodb describe-continuous-backups --table-name TripPlan-prod` → `ENABLED` (see [runbooks/delete-dlq.md](./runbooks/delete-dlq.md)).
 
 ## Stage behavior
 
@@ -64,42 +76,43 @@ CloudWatch dashboard name: **`TripPlan-{stage}`**.
 
 Widgets:
 
-- API Lambda duration (p50/p95/max), invocations/errors/throttles
-- HTTP API Count / 5xx and Latency p95 (by `ApiId`)
-- Enrichment estimated cost (custom metric; annotation at daily budget)
-- Delete DLQ depth (real metric when queue is passed in; **placeholder** until delete worker PR)
-- Alarm status + markdown links to runbooks
+- Runbook table (absolute links if `runbookBaseUrl` set; else monospaced repo paths — CloudWatch cannot resolve `./runbooks/…`)
+- Metric readiness note (enrichment EMF not live yet; future design signals)
+- API Lambda duration (p50/p95/max) with design **1.5s** + alarm **3s** annotations; invocations/errors/throttles
+- HTTP API Count / 5xx and Latency p95 (`ApiId` + `Stage=$default`)
+- **WAF** Allowed/Blocked (ALL + rate rule) and managed CRS CountedRequests
+- Enrichment estimated cost (empty until EMF); Delete DLQ (placeholder until worker)
+- Alarm status
 
 ### Alarms (SNS topic `tripplan-alarms-{stage}`)
 
 | Alarm | Condition |
 |-------|-----------|
-| `tripplan-{stage}-api-5xx-rate` | HTTP API 5xx / Count > **1%** for 10m |
-| `tripplan-{stage}-api-p95-latency` | Lambda Duration **p95 > 1500ms** for 10m |
-| `tripplan-{stage}-enrichment-budget` | `TripPlan/EnrichmentEstimatedCostUsd` sum > **$25/day prod**, **$5/day** else |
+| `tripplan-{stage}-api-5xx-rate` | 5xx/Count > **1%** for 10m **only when Count ≥ 20** per 5m period |
+| `tripplan-{stage}-api-p95-latency` | Lambda Duration **p95 > 3000ms** for 10m (design target 1.5s is annotation-only) |
+| `tripplan-{stage}-enrichment-budget` | `TripPlan/EnrichmentEstimatedCostUsd` sum > **$25/day prod**, **$5/day** else — **not live until EMF** |
 | `tripplan-{stage}-delete-dlq-depth` | DLQ visible messages > 0 (**only if** `deleteDlq` wired) |
 
-Subscribe an email: `-c alertEmail=…` (confirms via SNS).
+- **Prod:** `alertEmail` is **required** at synth; ALARM + OK actions on 5xx/latency.
+- **Non-prod:** `alertEmail` optional; ALARM only (no OK actions) to cut noise.
+- Confirm the SNS email subscription after first deploy or pages go nowhere.
 
 ### AWS Budgets
 
-Monthly cost budget `tripplan-{stage}-monthly-cost`:
+**Prod only** — budget `tripplan-prod-monthly-cost` at **$100/month**.
 
-| Stage | Limit (USD) |
-|-------|-------------|
-| dev | 25 |
-| staging | 40 |
-| prod | 100 |
-
-With `alertEmail`: notify at 80% actual and 100% forecasted.  
-**Note:** third-party enrich spend (AeroDataBox, MapTiler) is **outside** AWS Budgets — see [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md).
+- **CostFilters:** `TagKeyValue` = `user:Project$TripPlan` and `user:Stage$prod` (AND). Activate these as **Cost Allocation Tags** in Billing or the filter under-counts.
+- Dev/staging intentionally have **no** monthly AWS Budget (avoids account-wide false positives when multiple stages share an account).
+- With `alertEmail`: notify at 80% actual and 100% forecasted.
+- Third-party enrich spend (AeroDataBox, MapTiler) is **outside** AWS Budgets — see [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md).
 
 ### WAF
 
 REGIONAL WebACL `tripplan-{stage}-api`:
 
 - Default allow
-- Rate-based rule: **2000 requests / 5 minutes / IP** → block
+- **AWSManagedRulesCommonRuleSet** — **count** mode (observe before block)
+- Rate-based rule: **2000 requests / 5 minutes / IP** (`evaluationWindowSec: 300`) → block — **not** a substitute for app share/enrich limits
 - Associated to HTTP API stage `$default`
 - Export: `WebAclArn` for optional CloudFront attach later (CF needs a separate CLOUDFRONT-scoped ACL)
 
@@ -111,14 +124,18 @@ REGIONAL WebACL `tripplan-{stage}-api`:
 | Enrichment budget | [runbooks/enrichment-budget.md](./runbooks/enrichment-budget.md) |
 | Delete DLQ (+ PITR verify) | [runbooks/delete-dlq.md](./runbooks/delete-dlq.md) |
 
+Dashboard: pass `-c runbookBaseUrl=…/packages/infra/runbooks` for clickable links.
+
 ### Custom metrics (app)
 
 Namespace **`TripPlan`** (constant `TRIPPLAN_METRIC_NAMESPACE`):
 
 | Metric | Dimensions | When |
 |--------|------------|------|
-| `EnrichmentEstimatedCostUsd` | `Stage` | Emit via EMF on enrich attempts (sum = estimated USD) |
+| `EnrichmentEstimatedCostUsd` | `Stage` | **Follow-up:** emit via EMF on enrich attempts (sum = estimated USD). Budget alarm is scaffolding until then. |
 | `DeleteDlqDepthPlaceholder` | `Stage` | Dashboard only until real SQS DLQ exists |
+
+**Also not alarmed yet** (need app EMF): enrichment outcome fail rate, share 401/403/410 spikes, upload confirm rate, business counters.
 
 ## Outputs
 
@@ -133,7 +150,7 @@ Namespace **`TripPlan`** (constant `TRIPPLAN_METRIC_NAMESPACE`):
 | `DashboardName` | CloudWatch dashboard name |
 | `AlarmTopicArn` | SNS topic for alarms |
 | `WebAclArn` | WAFv2 WebACL ARN |
-| `MonthlyBudgetUsd` | Monthly AWS Budgets limit |
+| `MonthlyBudgetUsd` | Monthly AWS Budgets limit (**prod only**) |
 
 ### Secrets (placeholders)
 
