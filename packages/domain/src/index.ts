@@ -4,6 +4,7 @@
 
 export const DOMAIN_PACKAGE = "@tripplan/domain" as const;
 
+export * from "./time.js";
 export * from "./instant.js";
 export * from "./geo.js";
 export * from "./enrichment.js";
