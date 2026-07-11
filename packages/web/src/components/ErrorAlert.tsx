@@ -11,7 +11,7 @@ export function ErrorAlert(props: {
 }) {
   return (
     <Alert variant="destructive">
-      <CircleAlertIcon />
+      <CircleAlertIcon aria-hidden />
       {props.title !== undefined ? (
         <AlertTitle>{props.title}</AlertTitle>
       ) : null}

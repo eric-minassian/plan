@@ -25,7 +25,7 @@ import {
   ItemDescription,
   ItemTitle,
 } from "@eric-minassian/design/components/item";
-import { Spinner } from "@eric-minassian/design/components/spinner";
+import { BusyIcon } from "../components/BusyIcon.tsx";
 import { useAuth } from "@ericminassian/auth/react";
 import type { Trip } from "@tripplan/domain";
 import { Either } from "effect";
@@ -218,7 +218,7 @@ export function TripListPage() {
 
           {loading ? (
             <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-              <Spinner />
+              <BusyIcon />
               Loading trips…
             </div>
           ) : trips.length === 0 ? (
@@ -266,7 +266,7 @@ export function TripListPage() {
             >
               {loadingMore ? (
                 <>
-                  <Spinner data-icon="inline-start" />
+                  <BusyIcon data-icon="inline-start" />
                   Loading…
                 </>
               ) : (
@@ -368,7 +368,7 @@ export function TripListPage() {
             <Button type="submit" disabled={submitting}>
               {submitting ? (
                 <>
-                  <Spinner data-icon="inline-start" />
+                  <BusyIcon data-icon="inline-start" />
                   Creating…
                 </>
               ) : (

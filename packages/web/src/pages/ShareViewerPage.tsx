@@ -21,7 +21,7 @@ import {
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Separator } from "@eric-minassian/design/components/separator";
-import { Spinner } from "@eric-minassian/design/components/spinner";
+import { BusyIcon } from "../components/BusyIcon.tsx";
 import type { ItineraryItem, ShareTripDTO } from "@tripplan/domain";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -224,11 +224,9 @@ export function ShareViewerPage() {
     <div className="flex flex-col gap-5">
       <Card>
         <CardHeader className="border-b">
-          <Badge variant="outline" className="w-fit">
-            Shared trip · read-only
-          </Badge>
-          <CardTitle className="text-base">
-            {trip !== undefined ? trip.title : "Shared trip"}
+          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+            <Badge variant="outline">Shared trip · read-only</Badge>
+            <span>{trip !== undefined ? trip.title : "Shared trip"}</span>
           </CardTitle>
           {trip !== undefined ? (
             <CardDescription className="flex flex-col gap-1">
@@ -270,7 +268,7 @@ export function ShareViewerPage() {
       {loading ? (
         <Card>
           <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Spinner />
+            <BusyIcon />
             Loading shared trip…
           </CardContent>
         </Card>

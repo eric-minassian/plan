@@ -6,7 +6,7 @@ import {
   FieldLabel,
 } from "@eric-minassian/design/components/field";
 import { Input } from "@eric-minassian/design/components/input";
-import { Spinner } from "@eric-minassian/design/components/spinner";
+import { BusyIcon } from "./BusyIcon.tsx";
 import { Textarea } from "@eric-minassian/design/components/textarea";
 import type {
   CreateItineraryItem,
@@ -213,7 +213,7 @@ export function NoteForm(props: NoteFormProps) {
         <Button type="submit" disabled={submitting}>
           {submitting ? (
             <>
-              <Spinner data-icon="inline-start" />
+              <BusyIcon data-icon="inline-start" />
               Saving…
             </>
           ) : mode.kind === "create" ? (

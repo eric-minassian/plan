@@ -19,7 +19,7 @@ import {
   ItemDescription,
   ItemTitle,
 } from "@eric-minassian/design/components/item";
-import { Spinner } from "@eric-minassian/design/components/spinner";
+import { BusyIcon } from "./BusyIcon.tsx";
 import type {
   CreateShareResponse,
   ShareGrantPublic,
@@ -204,7 +204,7 @@ export function SharePanel(props: SharePanelProps) {
           >
             {creating ? (
               <>
-                <Spinner data-icon="inline-start" />
+                <BusyIcon data-icon="inline-start" />
                 Creating…
               </>
             ) : (
@@ -241,7 +241,7 @@ export function SharePanel(props: SharePanelProps) {
 
         {loading && shares.length === 0 ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner />
+            <BusyIcon />
             Loading shares…
           </div>
         ) : null}

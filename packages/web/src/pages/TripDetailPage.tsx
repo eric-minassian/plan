@@ -22,7 +22,7 @@ import {
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Separator } from "@eric-minassian/design/components/separator";
-import { Spinner } from "@eric-minassian/design/components/spinner";
+import { BusyIcon } from "../components/BusyIcon.tsx";
 import { useAuth } from "@ericminassian/auth/react";
 import type {
   CreateItineraryItem,
@@ -410,7 +410,7 @@ export function TripDetailPage() {
       {loading && detail === undefined ? (
         <Card>
           <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Spinner />
+            <BusyIcon />
             Loading trip…
           </CardContent>
         </Card>
