@@ -169,6 +169,22 @@ export interface TripRepository {
     expectedTripVersion: number,
     itemIds: readonly string[],
   ) => Effect.Effect<ReorderItemsResult, AppError>;
+
+  /**
+   * Get trip meta by tripId (GSI1 / scan in memory). Returns any status including
+   * deleted/deleting so share revalidation can map those to 410 Gone.
+   */
+  readonly getByTripId: (
+    tripId: string,
+  ) => Effect.Effect<Trip | undefined, AppError>;
+
+  /**
+   * List items for a trip without owner checks. Caller must authorize
+   * (share session revalidation or owner path).
+   */
+  readonly listItemsByTripId: (
+    tripId: string,
+  ) => Effect.Effect<readonly ItineraryItem[], AppError>;
 }
 
 export class TripRepo extends Context.Tag("TripRepo")<
@@ -605,5 +621,18 @@ export function makeInMemoryTripRepo(
         },
         catch: (e) => (e instanceof AppError ? e : AppError.internal()),
       }),
+
+    getByTripId: (tripId) =>
+      Effect.sync(() => {
+        for (const trip of store.values()) {
+          if (trip.tripId === tripId) {
+            return trip;
+          }
+        }
+        return undefined;
+      }),
+
+    listItemsByTripId: (tripId) =>
+      Effect.sync(() => listItemsForTrip(tripId)),
   };
 }

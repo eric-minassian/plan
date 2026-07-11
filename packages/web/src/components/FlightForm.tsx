@@ -6,12 +6,10 @@ import type {
 import { Either } from "effect";
 import { useState, type FormEvent } from "react";
 import { decodeCreateItem, decodeUpdateItem } from "../api/decode.ts";
-import { instantToWallClockLocal } from "../timeline/datetime.ts";
 import {
-  assignOptionalDetails,
-  optionalTrim,
-  parseOptionalInstant,
-} from "./form-utils.ts";
+  instantToWallClockLocal,
+  wallClockInZoneToInstant,
+} from "../timeline/datetime.ts";
 
 export type FlightFormMode =
   | { readonly kind: "create" }
@@ -83,6 +81,35 @@ function stateFromItem(
   };
 }
 
+function optionalTrim(value: string): string | undefined {
+  const t = value.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+/**
+ * Parse wall clock for create (omit empty) vs edit (null clears).
+ */
+function parseOptionalInstant(
+  wall: string,
+  tripTimezone: string,
+  label: string,
+  clearOnEmpty: boolean,
+):
+  | { readonly ok: true; readonly value: string | null | undefined }
+  | { readonly ok: false; readonly error: string } {
+  if (wall.trim().length === 0) {
+    return { ok: true, value: clearOnEmpty ? null : undefined };
+  }
+  const instant = wallClockInZoneToInstant(wall.trim(), tripTimezone);
+  if (instant === undefined) {
+    return {
+      ok: false,
+      error: `${label} is invalid for this trip timezone (check date/time)`,
+    };
+  }
+  return { ok: true, value: instant };
+}
+
 /**
  * Manual flight create / edit form (PR 8b).
  *
@@ -137,32 +164,20 @@ export function FlightForm(props: FlightFormProps) {
     }
 
     const details: Record<string, string> = { flightNumber };
-    assignOptionalDetails(details, [
-      ["airlineCode", form.airlineCode],
-      ["airlineName", form.airlineName],
-      ["departureAirport", form.departureAirport],
-      ["arrivalAirport", form.arrivalAirport],
-      ["seat", form.seat],
-    ]);
-    // Preserve detail keys not exposed in the form (full details replace).
-    if (mode.kind === "edit") {
-      const existing = mode.item.details;
-      if (existing.departureTerminal !== undefined) {
-        details["departureTerminal"] = existing.departureTerminal;
-      }
-      if (existing.arrivalTerminal !== undefined) {
-        details["arrivalTerminal"] = existing.arrivalTerminal;
-      }
-      if (existing.bookingReference !== undefined) {
-        details["bookingReference"] = existing.bookingReference;
-      }
-      if (existing.cabin !== undefined) {
-        details["cabin"] = existing.cabin;
-      }
-      if (existing.operatedBy !== undefined) {
-        details["operatedBy"] = existing.operatedBy;
-      }
+    const airlineCode = optionalTrim(form.airlineCode);
+    const airlineName = optionalTrim(form.airlineName);
+    const departureAirport = optionalTrim(form.departureAirport);
+    const arrivalAirport = optionalTrim(form.arrivalAirport);
+    const seat = optionalTrim(form.seat);
+    if (airlineCode !== undefined) details["airlineCode"] = airlineCode;
+    if (airlineName !== undefined) details["airlineName"] = airlineName;
+    if (departureAirport !== undefined) {
+      details["departureAirport"] = departureAirport;
     }
+    if (arrivalAirport !== undefined) {
+      details["arrivalAirport"] = arrivalAirport;
+    }
+    if (seat !== undefined) details["seat"] = seat;
 
     const confirmationCode = optionalTrim(form.confirmationCode);
     const notes = optionalTrim(form.notes);

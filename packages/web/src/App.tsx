@@ -7,6 +7,7 @@ import { AppShell } from "./components/AppShell.tsx";
 import { ProtectedRoute } from "./components/ProtectedRoute.tsx";
 import type { AppConfig } from "./config.ts";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage.tsx";
+import { ShareViewerPage } from "./pages/ShareViewerPage.tsx";
 import { TripDetailPage } from "./pages/TripDetailPage.tsx";
 import { TripListPage } from "./pages/TripListPage.tsx";
 
@@ -14,7 +15,7 @@ export interface AppProps {
   readonly config: AppConfig;
 }
 
-/** TripPlan SPA root: auth, trip list, day timeline (PR 8a/8b). */
+/** TripPlan SPA root: auth, trip list, day timeline, share viewer. */
 export function App({ config }: AppProps) {
   const authClient = useMemo(() => createWebAuthClient(config), [config]);
 
@@ -25,6 +26,8 @@ export function App({ config }: AppProps) {
           <AppShell>
             <Routes>
               <Route path="/auth/callback" element={<AuthCallbackPage />} />
+              {/* Public share viewer — no owner auth; token in URL hash. */}
+              <Route path="/s" element={<ShareViewerPage />} />
               <Route
                 path="/"
                 element={
