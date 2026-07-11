@@ -37,6 +37,9 @@ import {
   type TripRepository,
 } from "./trip-repo.js";
 
+/** Soft-delete meta retention (Dynamo TTL epoch offset from markDeleting). */
+export const TRIP_SOFT_DELETE_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 /** Dynamo single-table trip meta item (PK/SK + GSI1 + domain attrs). */
 export interface TripItem {
   readonly PK: string;
@@ -53,6 +56,8 @@ export interface TripItem {
   readonly version: number;
   readonly status: "active" | "deleting" | "deleted";
   readonly deletedAt?: string;
+  /** Dynamo TTL (epoch seconds) — set on markDeleting for 30-day meta purge. */
+  readonly ttl?: number;
 }
 
 /**
@@ -827,21 +832,24 @@ export function makeDynamoTripRepo(
         } satisfies Trip;
       }),
 
-    softDelete: (ownerId, tripId) =>
+    markDeleting: (ownerId, tripId) =>
       Effect.gen(function* () {
         const existingItem = yield* getTripItem(ownerId, tripId);
-        if (
-          existingItem === undefined ||
-          !isVisibleStatus(existingItem.status)
-        ) {
+        if (existingItem === undefined || existingItem.status === "deleted") {
           return yield* Effect.fail(AppError.notFound("Trip not found"));
+        }
+        // Idempotent re-enqueue path when worker/API already set deleting.
+        if (existingItem.status === "deleting") {
+          return itemToTrip(existingItem);
         }
         const existing = itemToTrip(existingItem);
         const deletedAt = normalizeInstant(new Date().toISOString());
+        const ttl =
+          Math.floor(Date.now() / 1000) + TRIP_SOFT_DELETE_TTL_SECONDS;
 
         // Condition only on active status — DELETE is not If-Match-gated.
-        // Bump version atomically so concurrent PATCH cannot cause silent
-        // version regression; CCF means already deleted / not active → 404.
+        // Bump version atomically so concurrent PATCH cannot race; CCF →
+        // re-Get (concurrent delete may have moved to deleting).
         const write = yield* Effect.either(
           Effect.tryPromise({
             try: () =>
@@ -850,17 +858,19 @@ export function makeDynamoTripRepo(
                   TableName: tableName,
                   Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
                   UpdateExpression:
-                    "SET #status = :deleted, deletedAt = :da, #ver = #ver + :one",
+                    "SET #status = :deleting, deletedAt = :da, #ver = #ver + :one, #ttl = :ttl",
                   ConditionExpression: "#status = :active",
                   ExpressionAttributeNames: {
                     "#status": "status",
                     "#ver": "version",
+                    "#ttl": "ttl",
                   },
                   ExpressionAttributeValues: {
-                    ":deleted": "deleted",
+                    ":deleting": "deleting",
                     ":active": "active",
                     ":da": deletedAt,
                     ":one": 1,
+                    ":ttl": ttl,
                   },
                   ReturnValues: "ALL_NEW",
                 }),
@@ -872,6 +882,174 @@ export function makeDynamoTripRepo(
         if (Either.isLeft(write)) {
           const cause = write.left;
           if (cause instanceof ConditionalCheckFailedException) {
+            // Concurrent DELETE may have won — treat deleting as success.
+            const live = yield* getTripItem(ownerId, tripId);
+            if (live !== undefined && live.status === "deleting") {
+              return itemToTrip(live);
+            }
+            return yield* Effect.fail(AppError.notFound("Trip not found"));
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
+
+        const attrs = write.right.Attributes as TripItem | undefined;
+        if (attrs !== undefined) {
+          return itemToTrip(attrs);
+        }
+        return {
+          ...existing,
+          status: "deleting" as const,
+          deletedAt: deletedAt as Trip["deletedAt"],
+          version: existing.version + 1,
+        };
+      }),
+
+    markDeleted: (ownerId, tripId) =>
+      Effect.gen(function* () {
+        const existingItem = yield* getTripItem(ownerId, tripId);
+        if (existingItem === undefined) {
+          return yield* Effect.fail(AppError.notFound("Trip not found"));
+        }
+        const existing = itemToTrip(existingItem);
+        const deletedAt =
+          existingItem.deletedAt ??
+          normalizeInstant(new Date().toISOString());
+        // Ensure TTL exists even if meta was interim-deleted before PR 15
+        // (status=deleted without ttl would otherwise retain forever).
+        const ttl =
+          existingItem.ttl ??
+          Math.floor(Date.now() / 1000) + TRIP_SOFT_DELETE_TTL_SECONDS;
+
+        // Pure no-op only when already deleted *and* ttl present.
+        if (
+          existingItem.status === "deleted" &&
+          existingItem.ttl !== undefined
+        ) {
+          return existing;
+        }
+
+        // Already deleted but missing ttl (or deletedAt): backfill only.
+        if (existingItem.status === "deleted") {
+          const backfill = yield* Effect.either(
+            Effect.tryPromise({
+              try: () =>
+                client.send(
+                  new UpdateCommand({
+                    TableName: tableName,
+                    Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+                    UpdateExpression: "SET deletedAt = :da, #ttl = :ttl",
+                    ConditionExpression:
+                      "attribute_exists(PK) AND #status = :deleted",
+                    ExpressionAttributeNames: {
+                      "#status": "status",
+                      "#ttl": "ttl",
+                    },
+                    ExpressionAttributeValues: {
+                      ":deleted": "deleted",
+                      ":da": deletedAt,
+                      ":ttl": ttl,
+                    },
+                    ReturnValues: "ALL_NEW",
+                  }),
+                ),
+              catch: (cause) => cause,
+            }),
+          );
+          if (Either.isLeft(backfill)) {
+            const cause = backfill.left;
+            if (cause instanceof ConditionalCheckFailedException) {
+              const live = yield* getTripItem(ownerId, tripId);
+              if (live !== undefined) {
+                return itemToTrip(live);
+              }
+              return yield* Effect.fail(AppError.notFound("Trip not found"));
+            }
+            return yield* Effect.fail(mapDynamoError(cause));
+          }
+          const attrs = backfill.right.Attributes as TripItem | undefined;
+          if (attrs !== undefined) {
+            return itemToTrip(attrs);
+          }
+          return {
+            ...existing,
+            status: "deleted" as const,
+            deletedAt: deletedAt as Trip["deletedAt"],
+          };
+        }
+
+        const write = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new UpdateCommand({
+                  TableName: tableName,
+                  Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+                  UpdateExpression:
+                    "SET #status = :deleted, deletedAt = :da, #ver = #ver + :one, #ttl = :ttl",
+                  ConditionExpression:
+                    "attribute_exists(PK) AND #status <> :deleted",
+                  ExpressionAttributeNames: {
+                    "#status": "status",
+                    "#ver": "version",
+                    "#ttl": "ttl",
+                  },
+                  ExpressionAttributeValues: {
+                    ":deleted": "deleted",
+                    ":da": deletedAt,
+                    ":one": 1,
+                    ":ttl": ttl,
+                  },
+                  ReturnValues: "ALL_NEW",
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
+
+        if (Either.isLeft(write)) {
+          const cause = write.left;
+          if (cause instanceof ConditionalCheckFailedException) {
+            // Concurrent finalize — re-Get; backfill ttl if still missing.
+            const live = yield* getTripItem(ownerId, tripId);
+            if (live === undefined) {
+              return yield* Effect.fail(AppError.notFound("Trip not found"));
+            }
+            if (live.status === "deleted" && live.ttl === undefined) {
+              // Recurse via same path by re-invoking logic: single Update for ttl.
+              const ttlOnly = yield* Effect.either(
+                Effect.tryPromise({
+                  try: () =>
+                    client.send(
+                      new UpdateCommand({
+                        TableName: tableName,
+                        Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+                        UpdateExpression: "SET deletedAt = :da, #ttl = :ttl",
+                        ConditionExpression: "attribute_exists(PK)",
+                        ExpressionAttributeNames: { "#ttl": "ttl" },
+                        ExpressionAttributeValues: {
+                          ":da":
+                            live.deletedAt ??
+                            normalizeInstant(new Date().toISOString()),
+                          ":ttl":
+                            Math.floor(Date.now() / 1000) +
+                            TRIP_SOFT_DELETE_TTL_SECONDS,
+                        },
+                        ReturnValues: "ALL_NEW",
+                      }),
+                    ),
+                  catch: (c) => c,
+                }),
+              );
+              if (Either.isRight(ttlOnly)) {
+                const a = ttlOnly.right.Attributes as TripItem | undefined;
+                if (a !== undefined) {
+                  return itemToTrip(a);
+                }
+              }
+            }
+            if (live.status === "deleted") {
+              return itemToTrip(live);
+            }
             return yield* Effect.fail(AppError.notFound("Trip not found"));
           }
           return yield* Effect.fail(mapDynamoError(cause));

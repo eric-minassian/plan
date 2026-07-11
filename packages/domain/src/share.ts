@@ -1,4 +1,5 @@
 import { Schema as S } from "effect";
+import { AttachmentMeta } from "./attachment.js";
 import { Instant } from "./instant.js";
 import { ItineraryItem } from "./itinerary-item.js";
 import { CivilDate, IanaTimeZone } from "./trip.js";
@@ -94,8 +95,9 @@ export const CreateShareSession = S.Struct({
 export type CreateShareSession = typeof CreateShareSession.Type;
 
 /**
- * Read-only trip for share viewers (no attachments in this PR).
+ * Read-only trip for share viewers.
  * Exposes `ownerDisplayName` only — never ownerId (use generic fallback if unknown).
+ * `attachments` is ready-only metadata (no s3Key); pending uploads are omitted.
  */
 export const ShareTripDTO = S.Struct({
   tripId: S.String,
@@ -105,6 +107,7 @@ export const ShareTripDTO = S.Struct({
   endDate: CivilDate,
   ownerDisplayName: S.String,
   items: S.Array(ItineraryItem),
+  attachments: S.Array(AttachmentMeta),
 });
 export type ShareTripDTO = typeof ShareTripDTO.Type;
 

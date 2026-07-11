@@ -235,6 +235,25 @@ function makeMockClient(store: Map<string, TripItem>): DynamoDBDocumentClient {
             $metadata: {},
           });
         }
+        if (
+          cond.includes("#status = :deleted") &&
+          !cond.includes("<>") &&
+          existing.status !== "deleted"
+        ) {
+          throw new ConditionalCheckFailedException({
+            message: "not deleted",
+            $metadata: {},
+          });
+        }
+        if (
+          cond.includes("#status <> :deleted") &&
+          existing.status === "deleted"
+        ) {
+          throw new ConditionalCheckFailedException({
+            message: "already deleted",
+            $metadata: {},
+          });
+        }
         if (cond.includes("#ver = :ev")) {
           const expected = values[":ev"];
           if (existing.version !== expected) {
@@ -252,10 +271,13 @@ function makeMockClient(store: Map<string, TripItem>): DynamoDBDocumentClient {
           startDate: (values[":sd"] as string | undefined) ?? existing.startDate,
           endDate: (values[":ed"] as string | undefined) ?? existing.endDate,
           status:
+            (values[":deleting"] as TripItem["status"] | undefined) ??
             (values[":deleted"] as TripItem["status"] | undefined) ??
             existing.status,
           deletedAt:
             (values[":da"] as string | undefined) ?? existing.deletedAt,
+          ttl:
+            (values[":ttl"] as number | undefined) ?? existing.ttl,
           version:
             values[":nv"] !== undefined
               ? (values[":nv"] as number)
@@ -379,7 +401,7 @@ describe("makeDynamoTripRepo update CCF re-Get", () => {
   });
 });
 
-describe("makeDynamoTripRepo softDelete status-only condition", () => {
+describe("makeDynamoTripRepo markDeleting status-only condition", () => {
   it("succeeds when version moved but status still active", async () => {
     const owner = "del-owner";
     const tripId = "trip-del";
@@ -389,10 +411,65 @@ describe("makeDynamoTripRepo softDelete status-only condition", () => {
     store.set(`${item.PK}\0${item.SK}`, item);
 
     const repo = makeDynamoTripRepo("TripPlan-test", makeMockClient(store));
-    const deleted = await Effect.runPromise(repo.softDelete(owner, tripId));
-    expect(deleted.status).toBe("deleted");
-    expect(deleted.version).toBe(6);
-    expect(deleted.deletedAt).toBeDefined();
+    const deleting = await Effect.runPromise(repo.markDeleting(owner, tripId));
+    expect(deleting.status).toBe("deleting");
+    expect(deleting.version).toBe(6);
+    expect(deleting.deletedAt).toBeDefined();
+  });
+
+  it("is idempotent when already deleting", async () => {
+    const owner = "del-owner-2";
+    const tripId = "trip-del-2";
+    const store = new Map<string, TripItem>();
+    const item = {
+      ...tripItem(owner, tripId, "deleting", 3),
+      deletedAt: "2026-07-01T00:00:00.000Z",
+    };
+    store.set(`${item.PK}\0${item.SK}`, item);
+
+    const repo = makeDynamoTripRepo("TripPlan-test", makeMockClient(store));
+    const again = await Effect.runPromise(repo.markDeleting(owner, tripId));
+    expect(again.status).toBe("deleting");
+    expect(again.version).toBe(3);
+  });
+});
+
+describe("makeDynamoTripRepo markDeleted ttl backfill", () => {
+  it("backfills ttl when already deleted without ttl (pre-PR15 migrate)", async () => {
+    const owner = "ttl-owner";
+    const tripId = "trip-ttl";
+    const store = new Map<string, TripItem>();
+    const item = {
+      ...tripItem(owner, tripId, "deleted", 2),
+      deletedAt: "2026-06-01T00:00:00.000Z",
+      // no ttl — interim soft-delete
+    };
+    store.set(`${item.PK}\0${item.SK}`, item);
+
+    const repo = makeDynamoTripRepo("TripPlan-test", makeMockClient(store));
+    const result = await Effect.runPromise(repo.markDeleted(owner, tripId));
+    expect(result.status).toBe("deleted");
+    const stored = store.get(`${item.PK}\0${item.SK}`);
+    expect(stored?.ttl).toBeTypeOf("number");
+    expect(stored?.ttl).toBeGreaterThan(Math.floor(Date.now() / 1000));
+  });
+
+  it("is pure no-op when deleted and ttl already set", async () => {
+    const owner = "ttl-owner-2";
+    const tripId = "trip-ttl-2";
+    const store = new Map<string, TripItem>();
+    const item = {
+      ...tripItem(owner, tripId, "deleted", 4),
+      deletedAt: "2026-06-01T00:00:00.000Z",
+      ttl: 2_000_000_000,
+    };
+    store.set(`${item.PK}\0${item.SK}`, item);
+
+    const repo = makeDynamoTripRepo("TripPlan-test", makeMockClient(store));
+    const result = await Effect.runPromise(repo.markDeleted(owner, tripId));
+    expect(result.status).toBe("deleted");
+    expect(result.version).toBe(4);
+    expect(store.get(`${item.PK}\0${item.SK}`)?.ttl).toBe(2_000_000_000);
   });
 });
 

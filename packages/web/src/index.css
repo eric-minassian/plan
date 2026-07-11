@@ -54,11 +54,6 @@ a:hover {
   padding: 2rem 1.25rem 3rem;
 }
 
-/* Widen only when trip workspace (timeline + map) is present. */
-.shell:has(.trip-workspace) {
-  max-width: 72rem;
-}
-
 .shell--error {
   color: var(--danger);
 }
@@ -206,13 +201,6 @@ a:hover {
   color: var(--danger);
   background: var(--danger-bg);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-}
-
-.banner--info {
-  margin-top: 0.75rem;
-  color: var(--fg);
-  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .trip-list {
@@ -495,232 +483,83 @@ a:hover {
   border-color: color-mix(in srgb, #a78bfa 35%, var(--border));
 }
 
-/* —— Trip workspace: timeline | map —— */
+/* Share management + viewer */
+.share-panel__hint {
+  font-size: 0.9rem;
+}
 
-.trip-workspace {
+.share-panel__create {
   display: grid;
-  gap: 1.25rem;
-  align-items: start;
+  gap: 0.75rem;
 }
 
-@media (min-width: 900px) {
-  .trip-workspace {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .trip-workspace__map {
-    position: sticky;
-    top: 1rem;
-  }
-}
-
-.trip-workspace__timeline {
-  min-width: 0;
-}
-
-.item-card__select {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  padding: 0;
-  margin: 0;
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.item-card__select:hover .item-card__title {
-  color: var(--accent);
-}
-
-.item-card--selected {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-.item-badge {
-  display: inline-block;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 0.12rem 0.4rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  white-space: nowrap;
-}
-
-.item-badge--location {
-  color: #e0b45a;
-  border-color: color-mix(in srgb, #e0b45a 40%, var(--border));
-}
-
-/* —— Map panel —— */
-
-.trip-map-panel {
-  min-width: 0;
-}
-
-.trip-map-panel__count {
-  font-size: 0.875rem;
-}
-
-.day-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.day-chip {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 40%, var(--panel));
-  color: var(--fg);
-  border-radius: 999px;
-  padding: 0.28rem 0.7rem;
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.day-chip:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-}
-
-.day-chip--active {
-  border-color: color-mix(
-    in srgb,
-    var(--day-chip-color, var(--accent)) 70%,
-    var(--border)
-  );
-  background: color-mix(
-    in srgb,
-    var(--day-chip-color, var(--accent)) 22%,
-    var(--panel)
-  );
-}
-
-.day-chip__count {
-  font-size: 0.7rem;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.map-frame {
-  position: relative;
-  width: 100%;
-  height: min(28rem, 55vh);
-  min-height: 16rem;
-  border-radius: 0.6rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: #121820;
-}
-
-.map-canvas {
-  width: 100%;
-  height: 100%;
-}
-
-.map-fallback {
+.share-panel__created {
   display: grid;
-  place-items: center;
-  height: min(28rem, 55vh);
-  min-height: 16rem;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
-.map-empty {
-  display: grid;
-  gap: 0.45rem;
-  padding: 1.25rem 0.25rem 0.5rem;
-}
-
-.map-empty__title {
-  margin: 0;
-  font-weight: 600;
-}
-
-.map-empty__body,
-.map-empty__hint {
+.share-panel__created-title {
   margin: 0;
   font-size: 0.9rem;
 }
 
-.map-empty code {
-  font-size: 0.85em;
+.share-panel__url {
+  display: block;
+  font-size: 0.8rem;
+  word-break: break-all;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.4rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
 }
 
-.map-pin-list {
+.share-list {
   list-style: none;
-  margin: 0.75rem 0 0;
+  margin: 0;
   padding: 0;
   display: grid;
-  gap: 0.35rem;
+  gap: 0.5rem;
 }
 
-.map-pin-list__btn {
-  appearance: none;
-  width: 100%;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 0.55rem;
-  row-gap: 0.1rem;
+.share-list__item {
+  display: flex;
   align-items: center;
-  text-align: left;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: color-mix(in srgb, var(--bg) 45%, var(--panel));
-  color: inherit;
-  font: inherit;
-  padding: 0.55rem 0.7rem;
-  cursor: pointer;
 }
 
-.map-pin-list__btn--selected {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
-
-.map-pin-list__dot {
-  grid-row: 1 / span 2;
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 50%;
-}
-
-.map-pin-list__title {
+.share-list__label {
   font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.share-list__meta {
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+.share-viewer__badge {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.share-viewer__owner {
+  margin-top: 0.35rem;
   font-size: 0.9rem;
 }
 
-.map-pin-list__label {
-  font-size: 0.8rem;
-}
-
-/* MapLibre attribution stays legible on dark chrome */
-.map-frame .maplibregl-ctrl-attrib {
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
-  color: var(--muted);
-  font-size: 0.65rem;
-}
-
-.map-frame .maplibregl-ctrl-group {
-  background: var(--panel);
-  border: 1px solid var(--border);
-}
-
-.map-frame .maplibregl-ctrl-group button {
-  background-color: var(--panel);
-}
-
-.map-frame .maplibregl-ctrl-group button + button {
-  border-top: 1px solid var(--border);
+.share-viewer__note {
+  font-size: 0.875rem;
 }

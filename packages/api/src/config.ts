@@ -6,6 +6,10 @@
 export interface ApiConfig {
   readonly stage: string;
   readonly tableName: string | undefined;
+  /** S3 documents bucket name (presigned attachments). */
+  readonly docsBucketName: string | undefined;
+  /** AWS region for S3 client (defaults to us-east-1). */
+  readonly awsRegion: string;
   readonly authIssuer: string;
   readonly authAudience: string;
   /**
@@ -19,6 +23,12 @@ export interface ApiConfig {
    * Env: `TRIPS_DELETE_ENABLED` (`true`/`false`); default enabled.
    */
   readonly tripsDeleteEnabled: boolean;
+  /**
+   * SQS queue URL for async trip cascade delete.
+   * Env: `TRIP_DELETE_QUEUE_URL`. When unset, API uses an in-memory queue
+   * (local/unit tests only — production always sets this via ApiStack).
+   */
+  readonly tripDeleteQueueUrl: string | undefined;
   /**
    * Allowed browser Origins for POST /share/session.
    * Derived from PUBLIC_API_BASE_URL plus common Vite dev origins.
@@ -34,13 +44,20 @@ export function loadConfig(
     rawBase !== undefined && rawBase.length > 0
       ? rawBase.replace(/\/$/, "")
       : undefined;
+  const rawBucket = env.DOCS_BUCKET_NAME?.trim();
+  const rawQueue = env.TRIP_DELETE_QUEUE_URL?.trim();
   return {
     stage: env.STAGE ?? "dev",
     tableName: env.TABLE_NAME,
+    docsBucketName:
+      rawBucket !== undefined && rawBucket.length > 0 ? rawBucket : undefined,
+    awsRegion: env.AWS_REGION?.trim() || "us-east-1",
     authIssuer: env.AUTH_ISSUER ?? "https://auth.ericminassian.com",
     authAudience: env.AUTH_AUDIENCE ?? "plan",
     publicApiBaseUrl,
     tripsDeleteEnabled: parseBoolFlag(env.TRIPS_DELETE_ENABLED, true),
+    tripDeleteQueueUrl:
+      rawQueue !== undefined && rawQueue.length > 0 ? rawQueue : undefined,
     shareAllowedOrigins: buildShareAllowedOrigins(publicApiBaseUrl, env.STAGE),
   };
 }

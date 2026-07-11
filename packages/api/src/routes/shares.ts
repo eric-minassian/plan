@@ -3,6 +3,7 @@ import {
   CreateShareSession,
   SHARE_OWNER_DISPLAY_FALLBACK,
   SHARE_PATH,
+  toAttachmentMeta,
   toShareGrantPublic,
   type ShareTripDTO,
 } from "@tripplan/domain";
@@ -22,6 +23,7 @@ import {
   jsonResponse,
   type HttpResponse,
 } from "../http/types.js";
+import { AttachmentRepo } from "../repos/attachment-repo.js";
 import {
   isGrantUsable,
   ShareRepo,
@@ -281,19 +283,20 @@ export function handleDeleteShareSession(): Effect.Effect<
 }
 
 /**
- * GET /api/v1/share/trip — read-only ShareTripDTO (no attachments).
+ * GET /api/v1/share/trip — read-only ShareTripDTO with ready attachment metadata.
  * Auth gate already revalidated grant + trip; re-load trip/items for DTO.
  * Never puts ownerId in the response body.
  */
 export function handleGetShareTrip(): Effect.Effect<
   HttpResponse,
   AppError,
-  CurrentShare | TripRepo | UserRepo | ShareRepo
+  CurrentShare | TripRepo | UserRepo | ShareRepo | AttachmentRepo
 > {
   return Effect.gen(function* () {
     const principal = yield* CurrentShare;
     const trips = yield* TripRepo;
     const users = yield* UserRepo;
+    const attachments = yield* AttachmentRepo;
 
     const trip = yield* trips.getByTripId(principal.tripId);
     if (trip === undefined) {
@@ -308,6 +311,9 @@ export function handleGetShareTrip(): Effect.Effect<
     }
 
     const items = yield* trips.listItemsByTripId(principal.tripId);
+    const readyAttachments = yield* attachments.listReadyForTrip(
+      principal.tripId,
+    );
     const profile = yield* users.getByUserId(principal.ownerId);
     // Never fall back to ownerId (OIDC sub) — privacy: share DTO must not leak it.
     const ownerDisplayName =
@@ -323,6 +329,7 @@ export function handleGetShareTrip(): Effect.Effect<
       endDate: trip.endDate,
       ownerDisplayName,
       items,
+      attachments: readyAttachments.map(toAttachmentMeta),
     };
     return jsonResponse(200, body);
   });
