@@ -1,6 +1,7 @@
 import type {
   CreateItineraryItem,
   ItineraryItem,
+  TransportDetails,
   UpdateItineraryItem,
 } from "@tripplan/domain";
 import { Either } from "effect";
@@ -13,15 +14,24 @@ import {
   parseOptionalInstant,
 } from "./form-utils.ts";
 
-export type FlightFormMode =
+const TRANSPORT_MODES = [
+  "car",
+  "taxi",
+  "rideshare",
+  "bus",
+  "ferry",
+  "other",
+] as const satisfies ReadonlyArray<TransportDetails["mode"]>;
+
+export type TransportFormMode =
   | { readonly kind: "create" }
   | {
       readonly kind: "edit";
-      readonly item: Extract<ItineraryItem, { readonly type: "flight" }>;
+      readonly item: Extract<ItineraryItem, { readonly type: "transport" }>;
     };
 
-export interface FlightFormProps {
-  readonly mode: FlightFormMode;
+export interface TransportFormProps {
+  readonly mode: TransportFormMode;
   readonly tripTimezone: string;
   readonly submitting: boolean;
   readonly error: string | undefined;
@@ -36,13 +46,10 @@ export interface FlightFormProps {
 
 interface FormState {
   title: string;
-  flightNumber: string;
-  airlineCode: string;
-  airlineName: string;
-  departureAirport: string;
-  arrivalAirport: string;
+  mode: TransportDetails["mode"];
+  provider: string;
+  pickupInstructions: string;
   confirmationCode: string;
-  seat: string;
   notes: string;
   startAtLocal: string;
   endAtLocal: string;
@@ -51,13 +58,10 @@ interface FormState {
 function emptyState(): FormState {
   return {
     title: "",
-    flightNumber: "",
-    airlineCode: "",
-    airlineName: "",
-    departureAirport: "",
-    arrivalAirport: "",
+    mode: "taxi",
+    provider: "",
+    pickupInstructions: "",
     confirmationCode: "",
-    seat: "",
     notes: "",
     startAtLocal: "",
     endAtLocal: "",
@@ -65,31 +69,27 @@ function emptyState(): FormState {
 }
 
 function stateFromItem(
-  item: Extract<ItineraryItem, { readonly type: "flight" }>,
+  item: Extract<ItineraryItem, { readonly type: "transport" }>,
   tripTimezone: string,
 ): FormState {
   return {
     title: item.title,
-    flightNumber: item.details.flightNumber,
-    airlineCode: item.details.airlineCode ?? "",
-    airlineName: item.details.airlineName ?? "",
-    departureAirport: item.details.departureAirport ?? "",
-    arrivalAirport: item.details.arrivalAirport ?? "",
+    mode: item.details.mode,
+    provider: item.details.provider ?? "",
+    pickupInstructions: item.details.pickupInstructions ?? "",
     confirmationCode: item.confirmationCode ?? "",
-    seat: item.details.seat ?? "",
     notes: item.notes ?? "",
     startAtLocal: instantToWallClockLocal(item.startAt, tripTimezone),
     endAtLocal: instantToWallClockLocal(item.endAt, tripTimezone),
   };
 }
 
-/**
- * Manual flight create / edit form (PR 8b).
- *
- * Parent remounts via `key` when opening a new session — no `useEffect`
- * reset on `mode` object identity.
- */
-export function FlightForm(props: FlightFormProps) {
+function isTransportMode(value: string): value is TransportDetails["mode"] {
+  return (TRANSPORT_MODES as readonly string[]).includes(value);
+}
+
+/** Transport create / edit form. Parent remounts via `key` on new sessions. */
+export function TransportForm(props: TransportFormProps) {
   const { mode, tripTimezone, submitting, error, onCancel, onCreate, onUpdate } =
     props;
   const [form, setForm] = useState<FormState>(() =>
@@ -104,13 +104,8 @@ export function FlightForm(props: FlightFormProps) {
     setLocalError(undefined);
 
     const title = form.title.trim();
-    const flightNumber = form.flightNumber.trim();
     if (title.length === 0) {
       setLocalError("Title is required");
-      return;
-    }
-    if (flightNumber.length === 0) {
-      setLocalError("Flight number is required");
       return;
     }
 
@@ -118,7 +113,7 @@ export function FlightForm(props: FlightFormProps) {
     const startParsed = parseOptionalInstant(
       form.startAtLocal,
       tripTimezone,
-      "Departure time",
+      "Pickup time",
       clearOnEmpty,
     );
     if (!startParsed.ok) {
@@ -128,7 +123,7 @@ export function FlightForm(props: FlightFormProps) {
     const endParsed = parseOptionalInstant(
       form.endAtLocal,
       tripTimezone,
-      "Arrival time",
+      "Drop-off time",
       clearOnEmpty,
     );
     if (!endParsed.ok) {
@@ -136,40 +131,18 @@ export function FlightForm(props: FlightFormProps) {
       return;
     }
 
-    const details: Record<string, string> = { flightNumber };
+    const details: Record<string, string> = { mode: form.mode };
     assignOptionalDetails(details, [
-      ["airlineCode", form.airlineCode],
-      ["airlineName", form.airlineName],
-      ["departureAirport", form.departureAirport],
-      ["arrivalAirport", form.arrivalAirport],
-      ["seat", form.seat],
+      ["provider", form.provider],
+      ["pickupInstructions", form.pickupInstructions],
     ]);
-    // Preserve detail keys not exposed in the form (full details replace).
-    if (mode.kind === "edit") {
-      const existing = mode.item.details;
-      if (existing.departureTerminal !== undefined) {
-        details["departureTerminal"] = existing.departureTerminal;
-      }
-      if (existing.arrivalTerminal !== undefined) {
-        details["arrivalTerminal"] = existing.arrivalTerminal;
-      }
-      if (existing.bookingReference !== undefined) {
-        details["bookingReference"] = existing.bookingReference;
-      }
-      if (existing.cabin !== undefined) {
-        details["cabin"] = existing.cabin;
-      }
-      if (existing.operatedBy !== undefined) {
-        details["operatedBy"] = existing.operatedBy;
-      }
-    }
 
     const confirmationCode = optionalTrim(form.confirmationCode);
     const notes = optionalTrim(form.notes);
 
     if (mode.kind === "create") {
       const body: Record<string, unknown> = {
-        type: "flight",
+        type: "transport",
         title,
         details,
       };
@@ -215,7 +188,7 @@ export function FlightForm(props: FlightFormProps) {
   return (
     <form className="form item-form" onSubmit={(e) => void onSubmit(e)}>
       <h3 className="item-form__title">
-        {mode.kind === "create" ? "Add flight" : "Edit flight"}
+        {mode.kind === "create" ? "Add transport" : "Edit transport"}
       </h3>
       {displayError !== undefined ? (
         <p className="banner banner--error" role="alert">
@@ -235,86 +208,63 @@ export function FlightForm(props: FlightFormProps) {
           onChange={(e) => {
             setForm((f) => ({ ...f, title: e.target.value }));
           }}
-          placeholder="UA 100 SFO → JFK"
+          placeholder="Airport transfer"
         />
       </label>
 
       <div className="form__row">
         <label className="field">
-          <span className="field__label">Flight number</span>
-          <input
+          <span className="field__label">Mode</span>
+          <select
             className="field__input"
-            type="text"
-            name="flightNumber"
-            required
-            value={form.flightNumber}
+            name="mode"
+            value={form.mode}
             onChange={(e) => {
-              setForm((f) => ({ ...f, flightNumber: e.target.value }));
+              const next = e.target.value;
+              if (isTransportMode(next)) {
+                setForm((f) => ({ ...f, mode: next }));
+              }
             }}
-            placeholder="100"
-          />
+          >
+            {TRANSPORT_MODES.map((m) => (
+              <option key={m} value={m}>
+                {m.charAt(0).toUpperCase() + m.slice(1)}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
-          <span className="field__label">Airline code</span>
+          <span className="field__label">Provider</span>
           <input
             className="field__input"
             type="text"
-            name="airlineCode"
-            value={form.airlineCode}
+            name="provider"
+            value={form.provider}
             onChange={(e) => {
-              setForm((f) => ({ ...f, airlineCode: e.target.value }));
+              setForm((f) => ({ ...f, provider: e.target.value }));
             }}
-            placeholder="UA"
+            placeholder="Uber"
           />
         </label>
       </div>
 
       <label className="field">
-        <span className="field__label">Airline name</span>
-        <input
-          className="field__input"
-          type="text"
-          name="airlineName"
-          value={form.airlineName}
+        <span className="field__label">Pickup instructions</span>
+        <textarea
+          className="field__input field__textarea"
+          name="pickupInstructions"
+          rows={2}
+          value={form.pickupInstructions}
           onChange={(e) => {
-            setForm((f) => ({ ...f, airlineName: e.target.value }));
+            setForm((f) => ({ ...f, pickupInstructions: e.target.value }));
           }}
-          placeholder="United Airlines"
+          placeholder="Meet at Terminal 2 arrivals"
         />
       </label>
 
       <div className="form__row">
         <label className="field">
-          <span className="field__label">From (IATA)</span>
-          <input
-            className="field__input"
-            type="text"
-            name="departureAirport"
-            value={form.departureAirport}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, departureAirport: e.target.value }));
-            }}
-            placeholder="SFO"
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">To (IATA)</span>
-          <input
-            className="field__input"
-            type="text"
-            name="arrivalAirport"
-            value={form.arrivalAirport}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, arrivalAirport: e.target.value }));
-            }}
-            placeholder="JFK"
-          />
-        </label>
-      </div>
-
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Departure ({tripTimezone})</span>
+          <span className="field__label">Pickup ({tripTimezone})</span>
           <input
             className="field__input"
             type="datetime-local"
@@ -326,7 +276,7 @@ export function FlightForm(props: FlightFormProps) {
           />
         </label>
         <label className="field">
-          <span className="field__label">Arrival ({tripTimezone})</span>
+          <span className="field__label">Drop-off ({tripTimezone})</span>
           <input
             className="field__input"
             type="datetime-local"
@@ -339,38 +289,22 @@ export function FlightForm(props: FlightFormProps) {
         </label>
       </div>
       <p className="field__hint">
-        Times are in {tripTimezone} (airport-local entry not supported yet).
-        Clear a field to remove that time.
+        Times are in {tripTimezone}. Clear a field to remove that time.
       </p>
 
-      <div className="form__row">
-        <label className="field">
-          <span className="field__label">Confirmation</span>
-          <input
-            className="field__input"
-            type="text"
-            name="confirmationCode"
-            maxLength={64}
-            value={form.confirmationCode}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, confirmationCode: e.target.value }));
-            }}
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Seat</span>
-          <input
-            className="field__input"
-            type="text"
-            name="seat"
-            value={form.seat}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, seat: e.target.value }));
-            }}
-            placeholder="12A"
-          />
-        </label>
-      </div>
+      <label className="field">
+        <span className="field__label">Confirmation</span>
+        <input
+          className="field__input"
+          type="text"
+          name="confirmationCode"
+          maxLength={64}
+          value={form.confirmationCode}
+          onChange={(e) => {
+            setForm((f) => ({ ...f, confirmationCode: e.target.value }));
+          }}
+        />
+      </label>
 
       <label className="field">
         <span className="field__label">Notes</span>
@@ -391,8 +325,8 @@ export function FlightForm(props: FlightFormProps) {
           {submitting
             ? "Saving…"
             : mode.kind === "create"
-              ? "Add flight"
-              : "Save flight"}
+              ? "Add transport"
+              : "Save transport"}
         </button>
         <button
           type="button"
