@@ -101,11 +101,14 @@ export interface TripRepository {
 
   /**
    * List items for an active owned trip, ordered by sortKey ascending.
-   * 404 if trip missing/not owned/deleted.
+   * 404 if trip missing/not owned/deleted (unless `tripAlreadyVerified`).
+   *
+   * Pass `tripAlreadyVerified: true` after `getActiveForOwner` to skip a second meta Get.
    */
   readonly listItems: (
     ownerId: string,
     tripId: string,
+    options?: { readonly tripAlreadyVerified?: boolean },
   ) => Effect.Effect<readonly ItineraryItem[], AppError>;
 
   /**
@@ -119,7 +122,10 @@ export interface TripRepository {
 
   /**
    * Create item. Server assigns itemId, sortKey, version=1.
-   * Optional Idempotency-Key (max 128). Enforces max {@link MAX_ITEMS_PER_TRIP}.
+   * Optional Idempotency-Key (max 128, scoped per owner; cross-trip reuse → 409).
+   * Bumps trip version so reorder If-Match covers item-set mutations.
+   * Item count limit is check-then-act (**best-effort** under concurrent creates;
+   * serial create beyond {@link MAX_ITEMS_PER_TRIP} is hard-rejected).
    */
   readonly createItem: (
     ownerId: string,
@@ -130,6 +136,7 @@ export interface TripRepository {
 
   /**
    * Conditional update by item version (If-Match). Type immutable at schema layer.
+   * Never rewrites sortKey (partial field update) so concurrent reorders are safe.
    * 409 on version mismatch; 404 if missing.
    */
   readonly updateItem: (
@@ -142,6 +149,7 @@ export interface TripRepository {
 
   /**
    * Delete item (attachments cascade deferred). 404 if missing.
+   * Bumps trip version so reorder If-Match covers item-set mutations.
    */
   readonly deleteItem: (
     ownerId: string,
@@ -152,6 +160,8 @@ export interface TripRepository {
   /**
    * Full-permutation reorder with trip-level If-Match lock.
    * sortKey = (index+1)*1000; bump trip version first; update items in chunks of ≤25.
+   * Create/delete also bump trip version so concurrent item-set changes invalidate
+   * in-flight reorders that have not yet taken the trip lock.
    */
   readonly reorderItems: (
     ownerId: string,
@@ -221,11 +231,29 @@ export function makeInMemoryTripRepo(
   const store = new Map<string, Trip>();
   /** tripId → itemId → item */
   const itemsByTrip = new Map<string, Map<string, ItineraryItem>>();
-  /** ownerId\0idemKey → item snapshot (24h TTL simulated via map only) */
-  const idempotency = new Map<string, ItineraryItem>();
+  /**
+   * ownerId\0idemKey → claim (tripId + itemId + completed).
+   * Replay loads live item; completed+missing → 404 (not recreate after delete).
+   * Cross-trip key reuse → 409 (never overwrite).
+   */
+  const idempotency = new Map<
+    string,
+    {
+      readonly tripId: string;
+      readonly itemId: string;
+      completed: boolean;
+    }
+  >();
 
   const tripKey = (ownerId: string, tripId: string) => `${ownerId}\0${tripId}`;
   const idemKey = (ownerId: string, key: string) => `${ownerId}\0${key}`;
+
+  const bumpTripVersion = (ownerId: string, tripId: string): Trip => {
+    const trip = requireActiveTrip(ownerId, tripId);
+    const bumped: Trip = { ...trip, version: trip.version + 1 };
+    store.set(tripKey(ownerId, tripId), bumped);
+    return bumped;
+  };
 
   for (const trip of seed) {
     store.set(tripKey(trip.ownerId, trip.tripId), trip);
@@ -384,10 +412,12 @@ export function makeInMemoryTripRepo(
         catch: (e) => (e instanceof AppError ? e : AppError.internal()),
       }),
 
-    listItems: (ownerId, tripId) =>
+    listItems: (ownerId, tripId, options) =>
       Effect.try({
         try: () => {
-          requireActiveTrip(ownerId, tripId);
+          if (options?.tripAlreadyVerified !== true) {
+            requireActiveTrip(ownerId, tripId);
+          }
           return listItemsForTrip(tripId);
         },
         catch: (e) => (e instanceof AppError ? e : AppError.internal()),
@@ -408,22 +438,54 @@ export function makeInMemoryTripRepo(
         try: () => {
           requireActiveTrip(ownerId, tripId);
           const key = assertIdempotencyKey(options?.idempotencyKey);
+          let reservedItemId: string | undefined;
+
           if (key !== undefined) {
-            const cached = idempotency.get(idemKey(ownerId, key));
-            if (cached !== undefined && cached.tripId === tripId) {
-              return cached;
+            const claim = idempotency.get(idemKey(ownerId, key));
+            if (claim !== undefined) {
+              if (claim.tripId !== tripId) {
+                throw AppError.conflict(
+                  "Idempotency-Key already used for a different trip",
+                  { tripId: claim.tripId },
+                );
+              }
+              const live = itemsByTrip.get(tripId)?.get(claim.itemId);
+              if (live !== undefined) {
+                return live;
+              }
+              // Completed create then DELETE — do not mint a new item under the key.
+              if (claim.completed) {
+                throw AppError.notFound("Item not found");
+              }
+              // Incomplete claim (crash window) — finish create with reserved id.
+              reservedItemId = claim.itemId;
             }
           }
 
           const existing = listItemsForTrip(tripId);
+          // Best-effort under concurrent creates; serial path hard-rejects at 100.
           if (existing.length >= MAX_ITEMS_PER_TRIP) {
             throw AppError.validation(
               `Item limit reached (max ${MAX_ITEMS_PER_TRIP} per trip)`,
               { maxItems: MAX_ITEMS_PER_TRIP },
             );
           }
+
+          const itemId = reservedItemId ?? crypto.randomUUID();
+          if (key !== undefined && reservedItemId === undefined) {
+            // Claim key before item write so retries share the same itemId.
+            idempotency.set(idemKey(ownerId, key), {
+              tripId,
+              itemId,
+              completed: false,
+            });
+          }
+
+          // Bump trip version so in-flight reorders with stale If-Match fail.
+          bumpTripVersion(ownerId, tripId);
+
           const sortKey = nextAppendSortKey(existing.map((i) => i.sortKey));
-          const item = buildCreatedItem(tripId, input, sortKey);
+          const item = buildCreatedItem(tripId, input, sortKey, itemId);
           let bucket = itemsByTrip.get(tripId);
           if (bucket === undefined) {
             bucket = new Map();
@@ -431,7 +493,11 @@ export function makeInMemoryTripRepo(
           }
           bucket.set(item.itemId, item);
           if (key !== undefined) {
-            idempotency.set(idemKey(ownerId, key), item);
+            idempotency.set(idemKey(ownerId, key), {
+              tripId,
+              itemId: item.itemId,
+              completed: true,
+            });
           }
           return item;
         },
@@ -452,7 +518,12 @@ export function makeInMemoryTripRepo(
               version: existing.version,
             });
           }
-          const updated = applyItemPatch(existing, patch);
+          // Preserve live sortKey at write time (never clobber reorder).
+          const liveSortKey = existing.sortKey;
+          const updated = {
+            ...applyItemPatch(existing, patch),
+            sortKey: liveSortKey,
+          };
           if (bucket === undefined) {
             throw AppError.notFound("Item not found");
           }
@@ -470,6 +541,8 @@ export function makeInMemoryTripRepo(
           if (bucket === undefined || !bucket.has(itemId)) {
             throw AppError.notFound("Item not found");
           }
+          // Bump trip version so in-flight reorders with stale If-Match fail.
+          bumpTripVersion(ownerId, tripId);
           bucket.delete(itemId);
         },
         catch: (e) => (e instanceof AppError ? e : AppError.internal()),
@@ -478,6 +551,11 @@ export function makeInMemoryTripRepo(
     reorderItems: (ownerId, tripId, expectedTripVersion, itemIds) =>
       Effect.try({
         try: () => {
+          if (itemIds.length > MAX_ITEMS_PER_TRIP) {
+            throw AppError.validation(
+              `itemIds length exceeds max items per trip (${MAX_ITEMS_PER_TRIP})`,
+            );
+          }
           const trip = requireActiveTrip(ownerId, tripId);
           if (trip.version !== expectedTripVersion) {
             throw AppError.conflict("Version mismatch", {

@@ -261,7 +261,9 @@ paths:
       description: |
         Create a discriminated itinerary item. Server assigns `itemId`, `sortKey`
         (append at end, gap 1000), `version: 1`, and timestamps.
-        Hard limit: 100 items per trip. Optional `Idempotency-Key` (max 128 chars).
+        Hard limit: 100 items per trip (**best-effort** under concurrent creates;
+        serial create beyond 100 is hard-rejected). Bumps trip version.
+        Optional `Idempotency-Key` (max 128 chars, per-owner; cross-trip reuse → 409).
       security:
         - ownerBearer: []
       parameters:
@@ -574,8 +576,11 @@ components:
       type: object
       required: [type, title, details]
       description: |
-        Discriminated create DTO. Omits server fields (itemId, tripId, sortKey,
-        version, createdAt, updatedAt). Instant fields accept RFC 3339 with zone.
+        Discriminated create DTO (runtime schema is a typed union in
+        `@tripplan/domain`; OpenAPI documents the envelope only). Omits server
+        fields (itemId, tripId, sortKey, version, createdAt, updatedAt).
+        Instant fields accept RFC 3339 with zone. `details` shape is validated
+        per `type` (e.g. flight requires flightNumber).
       properties:
         type:
           $ref: "#/components/schemas/ItemType"
@@ -609,7 +614,7 @@ components:
         details:
           type: object
           additionalProperties: true
-          description: Type-specific details (must match `type`)
+          description: Type-specific details (must match `type`; validated at runtime)
     UpdateItineraryItem:
       type: object
       additionalProperties: false

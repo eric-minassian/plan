@@ -14,7 +14,7 @@ import {
 } from "../http/decode.js";
 import { RequestContext } from "../http/request-context.js";
 import { getHeader, jsonResponse, type HttpResponse } from "../http/types.js";
-import { TripRepo } from "../repos/trip-repo.js";
+import { MAX_ITEMS_PER_TRIP, TripRepo } from "../repos/trip-repo.js";
 
 const ReorderBody = S.Struct({
   itemIds: S.Array(S.String),
@@ -194,6 +194,15 @@ export function handleReorderItems(): Effect.Effect<
     const decoded = decodeJsonBody(ReorderBody, request.body);
     if (Either.isLeft(decoded)) {
       return yield* Effect.fail(decoded.left);
+    }
+
+    // Cheap reject before loading the trip item set.
+    if (decoded.right.itemIds.length > MAX_ITEMS_PER_TRIP) {
+      return yield* Effect.fail(
+        AppError.validation(
+          `itemIds length exceeds max items per trip (${MAX_ITEMS_PER_TRIP})`,
+        ),
+      );
     }
 
     const result = yield* trips.reorderItems(

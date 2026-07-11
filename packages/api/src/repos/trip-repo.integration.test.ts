@@ -177,15 +177,57 @@ describeIt("DynamoDB item access patterns (2b, create, reorder)", () => {
     );
     expect(listed.map((i) => i.title)).toEqual(["A", "B"]);
 
-    const reordered = await Effect.runPromise(
-      repo.reorderItems(ownerId, trip.tripId, trip.version, [
-        b.itemId,
-        a.itemId,
-      ]),
+    // Creates bump trip version (1 → 3 after two items).
+    const meta = await Effect.runPromise(
+      repo.getActiveForOwner(ownerId, trip.tripId),
     );
-    expect(reordered.trip.version).toBe(trip.version + 1);
+    expect(meta?.version).toBe(3);
+
+    const reordered = await Effect.runPromise(
+      repo.reorderItems(ownerId, trip.tripId, 3, [b.itemId, a.itemId]),
+    );
+    expect(reordered.trip.version).toBe(4);
     expect(reordered.items.map((i) => i.itemId)).toEqual([b.itemId, a.itemId]);
     expect(reordered.items.map((i) => i.sortKey)).toEqual([1000, 2000]);
+  });
+
+  it("reorder ≥26 items exercises multi-chunk sortKey updates", async () => {
+    const ownerId = `it-reorder-chunks-${crypto.randomUUID()}`;
+    const trip = await Effect.runPromise(
+      repo.create(ownerId, {
+        title: "Chunk IT",
+        timezone: "UTC",
+        startDate: "2026-01-01",
+        endDate: "2026-01-05",
+      }),
+    );
+    const ids: string[] = [];
+    for (let i = 0; i < 26; i += 1) {
+      const item = await Effect.runPromise(
+        repo.createItem(ownerId, trip.tripId, {
+          type: "note",
+          title: `N${i}`,
+          details: {},
+        }),
+      );
+      ids.push(item.itemId);
+    }
+    const meta = await Effect.runPromise(
+      repo.getActiveForOwner(ownerId, trip.tripId),
+    );
+    const version = meta?.version;
+    expect(version).toBe(27); // 1 + 26 creates
+    if (version === undefined) {
+      throw new Error("expected trip");
+    }
+    const permuted = [...ids].reverse();
+    const result = await Effect.runPromise(
+      repo.reorderItems(ownerId, trip.tripId, version, permuted),
+    );
+    expect(result.items).toHaveLength(26);
+    expect(result.items[0]?.itemId).toBe(permuted[0]);
+    expect(result.items[0]?.sortKey).toBe(1000);
+    expect(result.items[25]?.sortKey).toBe(26_000);
   });
 });
 

@@ -121,7 +121,10 @@ export function handleGetTrip(): Effect.Effect<
     if (trip === undefined) {
       return yield* Effect.fail(AppError.notFound("Trip not found"));
     }
-    const items = yield* trips.listItems(principal.sub, tripId);
+    // Skip second meta Get — ownership already verified above.
+    const items = yield* trips.listItems(principal.sub, tripId, {
+      tripAlreadyVerified: true,
+    });
     return tripJsonResponse(200, trip, { items });
   });
 }
@@ -141,7 +144,9 @@ export function handleExportTrip(): Effect.Effect<
     if (trip === undefined) {
       return yield* Effect.fail(AppError.notFound("Trip not found"));
     }
-    const items = yield* trips.listItems(principal.sub, tripId);
+    const items = yield* trips.listItems(principal.sub, tripId, {
+      tripAlreadyVerified: true,
+    });
     const payload: TripDetailResponse = { ...trip, items };
     return jsonResponse(200, payload, {
       etag: etagFromVersion(trip.version),
