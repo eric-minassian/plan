@@ -7,11 +7,13 @@ import {
   SHARE_COOKIE_NAME,
   type ShareAuthService,
 } from "./auth/share-auth.js";
+import type { ApiConfig } from "./config.js";
 import {
   AppError,
   appErrorToHttpResponse,
   unexpectedToAppError,
 } from "./errors/app-error.js";
+import { matchPath } from "./http/path-match.js";
 import { RequestContext } from "./http/request-context.js";
 import type {
   AuthClass,
@@ -20,49 +22,135 @@ import type {
 } from "./http/types.js";
 import type { Logger } from "./logging/logger.js";
 import { consoleLogger } from "./logging/logger.js";
+import { TripRepo, type TripRepository } from "./repos/trip-repo.js";
 import { UserRepo, type UserRepository } from "./repos/user-repo.js";
 import { handleHealth } from "./routes/health.js";
 import { handleMe } from "./routes/me.js";
+import {
+  handleCreateTrip,
+  handleExportTrip,
+  handleGetTrip,
+  handleListTrips,
+  handlePatchTrip,
+  makeDeleteTripHandler,
+} from "./routes/trips.js";
+
+/** Services a route handler may require. */
+export type RouteHandlerEnv =
+  | OwnerAuth
+  | ShareAuth
+  | UserRepo
+  | TripRepo
+  | RequestContext
+  | CurrentOwner;
 
 export interface RouteDefinition {
   readonly method: string;
+  /** Path pattern with optional `:param` segments. */
   readonly path: string;
   readonly authClass: AuthClass;
-  readonly handler: () => Effect.Effect<
-    HttpResponse,
-    AppError,
-    | OwnerAuth
-    | ShareAuth
-    | UserRepo
-    | RequestContext
-    | CurrentOwner
-  >;
+  readonly handler: () => Effect.Effect<HttpResponse, AppError, RouteHandlerEnv>;
 }
 
 /**
- * Implemented routes. Share placeholders reserved for later PRs
- * (session exchange / share trip) without applying blanket JWT.
+ * Build the route table. Delete respects `tripsDeleteEnabled`.
  */
-export const routes: readonly RouteDefinition[] = [
-  {
-    method: "GET",
-    path: "/api/v1/health",
-    authClass: "public",
-    handler: handleHealth,
+export function buildRoutes(
+  config: Pick<ApiConfig, "tripsDeleteEnabled"> = {
+    tripsDeleteEnabled: true,
   },
-  {
-    method: "GET",
-    path: "/api/v1/me",
-    authClass: "owner",
-    handler: handleMe,
-  },
-];
+): readonly RouteDefinition[] {
+  return [
+    {
+      method: "GET",
+      path: "/api/v1/health",
+      authClass: "public",
+      handler: handleHealth,
+    },
+    {
+      method: "GET",
+      path: "/api/v1/me",
+      authClass: "owner",
+      handler: handleMe,
+    },
+    {
+      method: "POST",
+      path: "/api/v1/trips",
+      authClass: "owner",
+      handler: handleCreateTrip,
+    },
+    {
+      method: "GET",
+      path: "/api/v1/trips",
+      authClass: "owner",
+      handler: handleListTrips,
+    },
+    {
+      method: "GET",
+      path: "/api/v1/trips/:tripId/export",
+      authClass: "owner",
+      handler: handleExportTrip,
+    },
+    {
+      method: "GET",
+      path: "/api/v1/trips/:tripId",
+      authClass: "owner",
+      handler: handleGetTrip,
+    },
+    {
+      method: "PATCH",
+      path: "/api/v1/trips/:tripId",
+      authClass: "owner",
+      handler: handlePatchTrip,
+    },
+    {
+      method: "DELETE",
+      path: "/api/v1/trips/:tripId",
+      authClass: "owner",
+      handler: makeDeleteTripHandler(config),
+    },
+  ];
+}
+
+/** Default routes (delete enabled) — used by unit tests and static inspection. */
+export const routes: readonly RouteDefinition[] = buildRoutes();
 
 export interface RouterDeps {
   readonly ownerAuth: OwnerAuthService;
   readonly userRepo: UserRepository;
+  readonly tripRepo: TripRepository;
   readonly shareAuth?: ShareAuthService;
   readonly logger?: Logger;
+  readonly routes?: readonly RouteDefinition[];
+}
+
+interface MatchedRoute {
+  readonly route: RouteDefinition;
+  readonly pathParams: Readonly<Record<string, string>>;
+}
+
+function findRoute(
+  method: string,
+  path: string,
+  routeTable: readonly RouteDefinition[],
+): MatchedRoute | undefined {
+  for (const route of routeTable) {
+    if (route.method !== method) {
+      continue;
+    }
+    const matched = matchPath(route.path, path);
+    if (matched !== undefined) {
+      return { route, pathParams: matched.params };
+    }
+  }
+  return undefined;
+}
+
+function pathPatternMatches(
+  pattern: string,
+  path: string,
+): boolean {
+  return matchPath(pattern, path) !== undefined;
 }
 
 /**
@@ -76,13 +164,14 @@ export function handleRequest(
 ): Effect.Effect<HttpResponse> {
   const logger = deps.logger ?? consoleLogger;
   const started = Date.now();
+  const routeTable = deps.routes ?? routes;
 
-  const exact = routes.find(
-    (r) => r.method === request.method && r.path === request.path,
-  );
+  const matched = findRoute(request.method, request.path, routeTable);
 
-  if (exact === undefined) {
-    const pathMatches = routes.filter((r) => r.path === request.path);
+  if (matched === undefined) {
+    const pathMatches = routeTable.filter((r) =>
+      pathPatternMatches(r.path, request.path),
+    );
     if (pathMatches.length > 0) {
       const allow = [...new Set(pathMatches.map((r) => r.method))].join(", ");
       const response = methodNotAllowed(request.requestId, allow);
@@ -112,7 +201,7 @@ export function handleRequest(
     return Effect.succeed(response);
   }
 
-  const route = exact;
+  const { route, pathParams } = matched;
 
   const shareAuth: ShareAuthService =
     deps.shareAuth ??
@@ -121,33 +210,33 @@ export function handleRequest(
   const requestLayer = Layer.succeed(RequestContext, {
     request,
     authClass: route.authClass,
+    pathParams,
   });
   const ownerLayer = Layer.succeed(OwnerAuth, deps.ownerAuth);
   const shareLayer = Layer.succeed(ShareAuth, shareAuth);
   const userLayer = Layer.succeed(UserRepo, deps.userRepo);
+  const tripLayer = Layer.succeed(TripRepo, deps.tripRepo);
   const appLayer = Layer.mergeAll(
     requestLayer,
     ownerLayer,
     shareLayer,
     userLayer,
+    tripLayer,
   );
 
-  // Handlers that do not yield CurrentOwner still list it on RouteDefinition;
-  // narrow R after the owner gate injects the principal.
-  type HandlerEnv =
+  type CoreEnv =
     | OwnerAuth
     | ShareAuth
     | UserRepo
-    | RequestContext
-    | CurrentOwner;
-  type CoreEnv = OwnerAuth | ShareAuth | UserRepo | RequestContext;
+    | TripRepo
+    | RequestContext;
 
   const program = Effect.gen(function* () {
     // Auth class gate: verify once, inject principal for the handler.
     if (route.authClass === "owner") {
       const auth = yield* OwnerAuth;
       const principal = yield* auth.requireOwner();
-      const ownerHandler: Effect.Effect<HttpResponse, AppError, HandlerEnv> =
+      const ownerHandler: Effect.Effect<HttpResponse, AppError, RouteHandlerEnv> =
         route.handler();
       return yield* ownerHandler.pipe(
         Effect.provideService(CurrentOwner, principal),

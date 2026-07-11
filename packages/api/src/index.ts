@@ -13,6 +13,7 @@ export {
   type HandlerOptions,
 } from "./handler.js";
 export {
+  buildRoutes,
   handleRequest,
   handleRequestAsync,
   routes,
@@ -48,6 +49,15 @@ export {
   makeInMemoryUserRepo,
   type UserRepository,
 } from "./repos/user-repo.js";
+export {
+  TripRepo,
+  makeInMemoryTripRepo,
+  MAX_ACTIVE_TRIPS_PER_OWNER,
+  TRIP_LIST_PAGE_SIZE,
+  type TripRepository,
+  type ListTripsResult,
+} from "./repos/trip-repo.js";
+export { makeDynamoTripRepo } from "./repos/dynamo-trip-repo.js";
 export type {
   AuthClass,
   HttpRequest,

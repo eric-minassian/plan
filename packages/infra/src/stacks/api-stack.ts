@@ -11,7 +11,6 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import type { Construct } from "constructs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiCorsOrigins, spaOriginForStage } from "../hosts.js";
 import { isProdStage, type Stage } from "../stage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,9 +29,9 @@ export interface ApiStackProps extends cdk.StackProps {
  * JWT is verified in-Lambda via `@ericminassian/auth` — no Cognito, no
  * API Gateway JWT authorizer on owner routes.
  *
- * Profile storage: Lambda currently uses an in-memory UserRepository (skeleton).
- * `TABLE_NAME` + Dynamo R/W grants prepare for a Dynamo-backed profile upsert
- * (`USER#sub` / `PROFILE`); until then cold starts lose profile state.
+ * Persistence: `TABLE_NAME` + Dynamo R/W grants enable trip meta CRUD
+ * (`USER#ownerId` / `TRIP#tripId` + GSI1). User profile upsert remains
+ * in-memory until a Dynamo UserRepository lands.
  */
 export class ApiStack extends cdk.Stack {
   readonly httpApi: apigwv2.HttpApi;
@@ -94,10 +93,10 @@ export class ApiStack extends cdk.Stack {
         // Keep Effect + auth SDK in the bundle so Lambda has no node_modules layout issues.
         externalModules: ["@aws-sdk/*"],
       },
-      description: `TripPlan HTTP API (${stage}) — health + me skeleton (in-memory profile store)`,
+      description: `TripPlan HTTP API (${stage}) — health, me, owner trip CRUD`,
     });
 
-    // R/W for future Dynamo profile/trip repos; profile upsert is still in-memory.
+    // R/W for trip meta (and future profile) single-table access.
     table.grantReadWriteData(this.apiFunction);
 
     this.httpApi = new apigwv2.HttpApi(this, "HttpApi", {
@@ -180,19 +179,33 @@ export class ApiStack extends cdk.Stack {
 }
 
 /**
- * CORS: prod/staging only their stage SPA host (credentialed share cookies must
- * not be readable from arbitrary localhost pages against non-dev APIs).
- * Dev keeps Vite local. Origins shared via `apiCorsOrigins` in hosts.ts.
+ * CORS: prod/staging only SPA hosts (credentialed share cookies must not be
+ * readable from arbitrary localhost pages against prod). Dev keeps Vite local.
  */
 function corsOrigins(stage: Stage): string[] {
-  return apiCorsOrigins(stage);
+  const productionSpa = "https://plan.ericminassian.com";
+  const localVite = "http://localhost:5173";
+  switch (stage) {
+    case "prod":
+      return [productionSpa];
+    case "staging":
+      // Add a dedicated staging SPA host when it exists.
+      return [productionSpa];
+    case "dev":
+      return [productionSpa, localVite];
+  }
 }
 
 /**
  * Trusted public origin for DPoP `htu` reconstruction.
  * Dev leaves unset so Lambda uses API Gateway `Host` (execute-api URL).
- * Staging/prod use the stage SPA host (same CloudFront public host as /api).
  */
 function publicApiBaseUrlForStage(stage: Stage): string | undefined {
-  return spaOriginForStage(stage);
+  switch (stage) {
+    case "prod":
+    case "staging":
+      return "https://plan.ericminassian.com";
+    case "dev":
+      return undefined;
+  }
 }

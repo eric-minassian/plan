@@ -6,6 +6,7 @@ import {
   SHARE_COOKIE_NAME,
 } from "./auth/share-auth.js";
 import { silentLogger } from "./logging/logger.js";
+import { makeInMemoryTripRepo } from "./repos/trip-repo.js";
 import { makeInMemoryUserRepo } from "./repos/user-repo.js";
 import { handleRequest, routes } from "./router.js";
 import type { HttpRequest } from "./http/types.js";
@@ -23,20 +24,31 @@ function baseRequest(partial: Partial<HttpRequest> & Pick<HttpRequest, "method" 
   };
 }
 
+function emptyRepos() {
+  return {
+    userRepo: makeInMemoryUserRepo(),
+    tripRepo: makeInMemoryTripRepo(),
+    logger: silentLogger,
+  };
+}
+
 describe("authz matrix", () => {
-  it("exposes health as public and me as owner", () => {
+  it("exposes health as public and me/trips as owner", () => {
     const health = routes.find((r) => r.path === "/api/v1/health");
     const me = routes.find((r) => r.path === "/api/v1/me");
+    const listTrips = routes.find(
+      (r) => r.method === "GET" && r.path === "/api/v1/trips",
+    );
     expect(health?.authClass).toBe("public");
     expect(me?.authClass).toBe("owner");
+    expect(listTrips?.authClass).toBe("owner");
   });
 
   it("GET /api/v1/health succeeds without owner auth", async () => {
     const response = await Effect.runPromise(
       handleRequest(baseRequest({ method: "GET", path: "/api/v1/health" }), {
         ownerAuth: makeMockOwnerAuth(null),
-        userRepo: makeInMemoryUserRepo(),
-        logger: silentLogger,
+        ...emptyRepos(),
       }),
     );
     expect(response.status).toBe(200);
@@ -47,8 +59,7 @@ describe("authz matrix", () => {
     const response = await Effect.runPromise(
       handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
         ownerAuth: makeMockOwnerAuth(null),
-        userRepo: makeInMemoryUserRepo(),
-        logger: silentLogger,
+        ...emptyRepos(),
       }),
     );
     expect(response.status).toBe(401);
@@ -69,6 +80,7 @@ describe("authz matrix", () => {
       handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
         ownerAuth: makeMockOwnerAuth(principal),
         userRepo,
+        tripRepo: makeInMemoryTripRepo(),
         logger: silentLogger,
       }),
     );
@@ -92,6 +104,7 @@ describe("authz matrix", () => {
       handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
         ownerAuth: makeMockOwnerAuth(principal),
         userRepo,
+        tripRepo: makeInMemoryTripRepo(),
         logger: silentLogger,
       }),
     );
@@ -104,8 +117,7 @@ describe("authz matrix", () => {
     const response = await Effect.runPromise(
       handleRequest(baseRequest({ method: "GET", path: "/api/v1/me" }), {
         ownerAuth: makeMockOwnerAuth(principal),
-        userRepo: makeInMemoryUserRepo(),
-        logger: silentLogger,
+        ...emptyRepos(),
       }),
     );
     const body = JSON.parse(response.body ?? "{}") as { displayName: string };
@@ -115,11 +127,10 @@ describe("authz matrix", () => {
   it("unknown route returns 404 ApiErrorBody", async () => {
     const response = await Effect.runPromise(
       handleRequest(
-        baseRequest({ method: "GET", path: "/api/v1/trips" }),
+        baseRequest({ method: "GET", path: "/api/v1/not-a-real-route" }),
         {
           ownerAuth: makeMockOwnerAuth(null),
-          userRepo: makeInMemoryUserRepo(),
-          logger: silentLogger,
+          ...emptyRepos(),
         },
       ),
     );
@@ -158,8 +169,7 @@ describe("authz matrix", () => {
     const response = await Effect.runPromise(
       handleRequest(baseRequest({ method: "POST", path: "/api/v1/me" }), {
         ownerAuth: makeMockOwnerAuth(null),
-        userRepo: makeInMemoryUserRepo(),
-        logger: silentLogger,
+        ...emptyRepos(),
       }),
     );
     expect(response.status).toBe(405);
@@ -185,8 +195,7 @@ describe("authz matrix", () => {
             return Effect.succeed(principal);
           },
         },
-        userRepo: makeInMemoryUserRepo(),
-        logger: silentLogger,
+        ...emptyRepos(),
       }),
     );
     expect(response.status).toBe(200);

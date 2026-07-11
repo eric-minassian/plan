@@ -17,6 +17,8 @@
     "openapi": "node -e \"const fs=require('fs'); if(!fs.existsSync('openapi.yaml')) process.exit(1); console.log('OpenAPI source of truth: openapi.yaml');\""
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1085.0",
+    "@aws-sdk/lib-dynamodb": "^3.1085.0",
     "@ericminassian/auth": "^1.1.0",
     "@tripplan/domain": "workspace:*",
     "effect": "^3.21.4"

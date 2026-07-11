@@ -4,7 +4,7 @@ info:
   title: TripPlan API
   version: 0.1.0
   description: |
-    TripPlan HTTP API (skeleton). Owner auth is external OIDC at
+    TripPlan HTTP API. Owner auth is external OIDC at
     auth.ericminassian.com via in-Lambda verification (no Cognito).
     Share session routes are reserved for a later PR.
 servers:
@@ -63,6 +63,194 @@ paths:
               schema:
                 type: string
               description: RFC 6750 / RFC 9449 challenge when provided by the verifier
+  /api/v1/trips:
+    post:
+      operationId: createTrip
+      tags: [Owner]
+      summary: Create trip
+      description: |
+        Create a trip owned by the authenticated subject (`sub`).
+        Hard limit: 100 active trips per owner (ValidationError beyond).
+      security:
+        - ownerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTrip"
+      responses:
+        "201":
+          description: Trip created
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Opaque version string (e.g. `"1"`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      operationId: listTrips
+      tags: [Owner]
+      summary: List owned active trips
+      description: |
+        Cursor-paginated list of the caller's active trips (deleted hidden).
+        Default page size 50 (max 50).
+      security:
+        - ownerBearer: []
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque cursor from a previous page's `nextCursor`
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 50
+      responses:
+        "200":
+          description: Page of trips
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/trips/{tripId}:
+    parameters:
+      - $ref: "#/components/parameters/tripId"
+    get:
+      operationId: getTrip
+      tags: [Owner]
+      summary: Get trip meta + items
+      description: |
+        Returns trip metadata and items array (items empty until itinerary PR).
+        Soft-deleted trips return 404.
+      security:
+        - ownerBearer: []
+      responses:
+        "200":
+          description: Trip detail
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: patchTrip
+      tags: [Owner]
+      summary: Update trip metadata
+      description: |
+        Requires `If-Match` with the current integer version (opaque quoted form).
+        Body field `expectedVersion` is rejected with 400 ValidationError.
+        Version mismatch → 409 Conflict with current `version` in details.
+      security:
+        - ownerBearer: []
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Opaque version, e.g. `"1"`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTrip"
+      responses:
+        "200":
+          description: Updated trip
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteTrip
+      tags: [Owner]
+      summary: Soft-delete trip (interim)
+      description: |
+        Interim contract: sets `status=deleted` and `deletedAt` on trip meta only.
+        Does not cascade children or enqueue SQS. List/GET hide deleted trips.
+        Feature flag `TRIPS_DELETE_ENABLED` defaults on.
+      security:
+        - ownerBearer: []
+      responses:
+        "200":
+          description: Soft-deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDeleteResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Delete disabled by feature flag
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBody"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/trips/{tripId}/export:
+    parameters:
+      - $ref: "#/components/parameters/tripId"
+    get:
+      operationId: exportTrip
+      tags: [Owner]
+      summary: Export trip JSON
+      description: Portability payload — trip meta + items (items empty until itinerary PR).
+      security:
+        - ownerBearer: []
+      responses:
+        "200":
+          description: Export JSON
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     ownerBearer:
@@ -72,6 +260,38 @@ components:
       description: |
         OIDC access token from auth.ericminassian.com (audience `plan`).
         DPoP-bound tokens must include a valid DPoP proof (mode auto).
+  parameters:
+    tripId:
+      name: tripId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorBody"
+    NotFound:
+      description: Resource not found (or soft-deleted for owner GET)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorBody"
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorBody"
+    Conflict:
+      description: Optimistic concurrency conflict (version mismatch)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorBody"
   schemas:
     HealthResponse:
       type: object
@@ -100,6 +320,104 @@ components:
           description: Canonical Instant (ISO-8601 second precision with zone)
           examples:
             - "2026-07-10T12:00:00Z"
+    CivilDate:
+      type: string
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+      description: Real calendar civil date YYYY-MM-DD
+    CreateTrip:
+      type: object
+      additionalProperties: false
+      required: [title, timezone, startDate, endDate]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        timezone:
+          type: string
+          description: IANA time zone
+        startDate:
+          $ref: "#/components/schemas/CivilDate"
+        endDate:
+          $ref: "#/components/schemas/CivilDate"
+    UpdateTrip:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        timezone:
+          type: string
+        startDate:
+          $ref: "#/components/schemas/CivilDate"
+        endDate:
+          $ref: "#/components/schemas/CivilDate"
+      description: At least one field required. Do not send expectedVersion.
+    Trip:
+      type: object
+      additionalProperties: false
+      required:
+        [tripId, ownerId, title, timezone, startDate, endDate, version, status]
+      properties:
+        tripId:
+          type: string
+        ownerId:
+          type: string
+        title:
+          type: string
+        timezone:
+          type: string
+        startDate:
+          $ref: "#/components/schemas/CivilDate"
+        endDate:
+          $ref: "#/components/schemas/CivilDate"
+        version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [active, deleting, deleted]
+        deletedAt:
+          type: string
+          description: Present when soft-deleted
+    TripDetail:
+      allOf:
+        - $ref: "#/components/schemas/Trip"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: {}
+              description: Itinerary items (empty until items PR)
+    TripListResponse:
+      type: object
+      additionalProperties: false
+      required: [trips]
+      properties:
+        trips:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trip"
+        nextCursor:
+          type: string
+          description: Opaque cursor for the next page when more results exist
+    TripDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [tripId, status, version]
+      properties:
+        tripId:
+          type: string
+        status:
+          type: string
+          const: deleted
+        deletedAt:
+          type: string
+        version:
+          type: integer
     ApiErrorBody:
       type: object
       additionalProperties: false
