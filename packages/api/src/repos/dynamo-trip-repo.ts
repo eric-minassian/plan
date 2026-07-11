@@ -1,10 +1,11 @@
-import type { Trip } from "@tripplan/domain";
+import type { ItineraryItem, Trip } from "@tripplan/domain";
 import { normalizeInstant } from "@tripplan/domain";
 import {
   ConditionalCheckFailedException,
   DynamoDBClient,
 } from "@aws-sdk/client-dynamodb";
 import {
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -14,10 +15,21 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { Effect, Either } from "effect";
 import { AppError, internalFromCause } from "../errors/app-error.js";
+import { applyItemPatch, buildCreatedItem } from "./item-build.js";
+import {
+  MAX_IDEMPOTENCY_KEY_LENGTH,
+  MAX_ITEMS_PER_TRIP,
+  REORDER_CHUNK_SIZE,
+  chunkArray,
+  computeReorderSortKeys,
+  isFullPermutation,
+  nextAppendSortKey,
+} from "./reorder.js";
 import {
   MAX_ACTIVE_TRIPS_PER_OWNER,
   TRIP_LIST_PAGE_SIZE,
   type ListTripsResult,
+  type ReorderItemsResult,
   type TripRepository,
 } from "./trip-repo.js";
 
@@ -39,12 +51,68 @@ export interface TripItem {
   readonly deletedAt?: string;
 }
 
+/**
+ * Dynamo itinerary item row.
+ * PK=TRIP#tripId, SK=ITEM#itemId (immutable identity — never encode sortKey in SK).
+ * ownerId denormalized for authz without extra hops.
+ */
+export interface DynamoItineraryItem {
+  readonly PK: string;
+  readonly SK: string;
+  readonly entityType: "ITEM";
+  readonly ownerId: string;
+  readonly itemId: string;
+  readonly tripId: string;
+  readonly type: ItineraryItem["type"];
+  readonly title: string;
+  readonly startAt?: string;
+  readonly endAt?: string;
+  readonly startTimeZone?: string;
+  readonly endTimeZone?: string;
+  readonly startLocation?: ItineraryItem["startLocation"];
+  readonly endLocation?: ItineraryItem["endLocation"];
+  readonly notes?: string;
+  readonly confirmationCode?: string;
+  readonly sortKey: number;
+  readonly version: number;
+  readonly enrichment?: ItineraryItem["enrichment"];
+  readonly details: ItineraryItem["details"];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Idempotency record for POST items. TTL 24h. */
+export interface IdempotencyItem {
+  readonly PK: string;
+  readonly SK: string;
+  readonly entityType: "IDEM";
+  readonly tripId: string;
+  readonly itemSnapshot: ItineraryItem;
+  readonly ttl: number;
+}
+
 export function userPk(ownerId: string): string {
   return `USER#${ownerId}`;
 }
 
 export function tripSk(tripId: string): string {
   return `TRIP#${tripId}`;
+}
+
+export function tripItemsPk(tripId: string): string {
+  return `TRIP#${tripId}`;
+}
+
+export function itemSk(itemId: string): string {
+  return `ITEM#${itemId}`;
+}
+
+export function idemPk(ownerId: string): string {
+  return `IDEM#${ownerId}`;
+}
+
+export function idemSk(key: string): string {
+  return `KEY#${key}`;
 }
 
 function gsi1Pk(tripId: string): string {
@@ -70,6 +138,135 @@ export function itemToTrip(item: TripItem): Trip {
     return { ...trip, deletedAt: item.deletedAt as Trip["deletedAt"] };
   }
   return trip;
+}
+
+/** Map Dynamo ITEM row → domain ItineraryItem (drops PK/SK/ownerId). */
+export function dynamoItemToDomain(row: DynamoItineraryItem): ItineraryItem {
+  const base = {
+    itemId: row.itemId,
+    tripId: row.tripId,
+    title: row.title,
+    sortKey: row.sortKey,
+    version: row.version,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    ...(row.startAt !== undefined ? { startAt: row.startAt } : {}),
+    ...(row.endAt !== undefined ? { endAt: row.endAt } : {}),
+    ...(row.startTimeZone !== undefined
+      ? { startTimeZone: row.startTimeZone }
+      : {}),
+    ...(row.endTimeZone !== undefined
+      ? { endTimeZone: row.endTimeZone }
+      : {}),
+    ...(row.startLocation !== undefined
+      ? { startLocation: row.startLocation }
+      : {}),
+    ...(row.endLocation !== undefined
+      ? { endLocation: row.endLocation }
+      : {}),
+    ...(row.notes !== undefined ? { notes: row.notes } : {}),
+    ...(row.confirmationCode !== undefined
+      ? { confirmationCode: row.confirmationCode }
+      : {}),
+    ...(row.enrichment !== undefined ? { enrichment: row.enrichment } : {}),
+  };
+
+  switch (row.type) {
+    case "flight":
+      return {
+        ...base,
+        type: "flight",
+        details: row.details as Extract<ItineraryItem, { type: "flight" }>["details"],
+      };
+    case "train":
+      return {
+        ...base,
+        type: "train",
+        details: row.details as Extract<ItineraryItem, { type: "train" }>["details"],
+      };
+    case "hotel":
+      return {
+        ...base,
+        type: "hotel",
+        details: row.details as Extract<ItineraryItem, { type: "hotel" }>["details"],
+      };
+    case "transport":
+      return {
+        ...base,
+        type: "transport",
+        details: row.details as Extract<
+          ItineraryItem,
+          { type: "transport" }
+        >["details"],
+      };
+    case "activity":
+      return {
+        ...base,
+        type: "activity",
+        details: row.details as Extract<
+          ItineraryItem,
+          { type: "activity" }
+        >["details"],
+      };
+    case "ticket":
+      return {
+        ...base,
+        type: "ticket",
+        details: row.details as Extract<ItineraryItem, { type: "ticket" }>["details"],
+      };
+    case "note":
+      return {
+        ...base,
+        type: "note",
+        details: row.details as Extract<ItineraryItem, { type: "note" }>["details"],
+      };
+    case "custom":
+      return {
+        ...base,
+        type: "custom",
+        details: row.details as Extract<ItineraryItem, { type: "custom" }>["details"],
+      };
+  }
+}
+
+export function domainItemToDynamo(
+  ownerId: string,
+  item: ItineraryItem,
+): DynamoItineraryItem {
+  return {
+    PK: tripItemsPk(item.tripId),
+    SK: itemSk(item.itemId),
+    entityType: "ITEM",
+    ownerId,
+    itemId: item.itemId,
+    tripId: item.tripId,
+    type: item.type,
+    title: item.title,
+    ...(item.startAt !== undefined ? { startAt: item.startAt } : {}),
+    ...(item.endAt !== undefined ? { endAt: item.endAt } : {}),
+    ...(item.startTimeZone !== undefined
+      ? { startTimeZone: item.startTimeZone }
+      : {}),
+    ...(item.endTimeZone !== undefined
+      ? { endTimeZone: item.endTimeZone }
+      : {}),
+    ...(item.startLocation !== undefined
+      ? { startLocation: item.startLocation }
+      : {}),
+    ...(item.endLocation !== undefined
+      ? { endLocation: item.endLocation }
+      : {}),
+    ...(item.notes !== undefined ? { notes: item.notes } : {}),
+    ...(item.confirmationCode !== undefined
+      ? { confirmationCode: item.confirmationCode }
+      : {}),
+    sortKey: item.sortKey,
+    version: item.version,
+    ...(item.enrichment !== undefined ? { enrichment: item.enrichment } : {}),
+    details: item.details,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
 }
 
 function requireDateRange(
@@ -145,6 +342,33 @@ function cursorFromItem(item: TripItem): string {
   return encodeCursor({ PK: item.PK, SK: item.SK });
 }
 
+function sortItemsBySortKey(
+  items: readonly ItineraryItem[],
+): ItineraryItem[] {
+  return [...items].sort((a, b) => {
+    if (a.sortKey !== b.sortKey) {
+      return a.sortKey - b.sortKey;
+    }
+    return a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0;
+  });
+}
+
+function assertIdempotencyKey(key: string | undefined): string | undefined {
+  if (key === undefined) {
+    return undefined;
+  }
+  const trimmed = key.trim();
+  if (trimmed.length === 0) {
+    throw AppError.validation("Idempotency-Key must not be empty");
+  }
+  if (trimmed.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw AppError.validation(
+      `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
+    );
+  }
+  return trimmed;
+}
+
 /**
  * Page active trips from Query results without dropping mid-page matches.
  *
@@ -201,9 +425,12 @@ export function accumulateActivePage(input: {
   return { trips, nextCursor };
 }
 
+const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+
 /**
- * DynamoDB single-table TripRepository.
- * PK=USER#ownerId SK=TRIP#tripId; GSI1PK=TRIP#tripId GSI1SK=META.
+ * DynamoDB single-table TripRepository (trips + itinerary items).
+ * Trip: PK=USER#ownerId SK=TRIP#tripId; GSI1PK=TRIP#tripId GSI1SK=META.
+ * Item: PK=TRIP#tripId SK=ITEM#itemId; sortKey attribute (never in SK).
  *
  * Active-trip quota (100) is check-then-act (**best-effort** under concurrent
  * creates). Soft-deleted rows do not count. Atomic counter deferred post-v1.
@@ -214,7 +441,7 @@ export function makeDynamoTripRepo(
     new DynamoDBClient({}),
   ),
 ): TripRepository {
-  const getItem = (
+  const getTripItem = (
     ownerId: string,
     tripId: string,
   ): Effect.Effect<TripItem | undefined, AppError> =>
@@ -230,6 +457,69 @@ export function makeDynamoTripRepo(
           return undefined;
         }
         return result.Item as TripItem;
+      },
+      catch: mapDynamoError,
+    });
+
+  const requireActiveTrip = (
+    ownerId: string,
+    tripId: string,
+  ): Effect.Effect<Trip, AppError> =>
+    Effect.gen(function* () {
+      const item = yield* getTripItem(ownerId, tripId);
+      if (item === undefined || !isVisibleStatus(item.status)) {
+        return yield* Effect.fail(AppError.notFound("Trip not found"));
+      }
+      return itemToTrip(item);
+    });
+
+  const queryAllItems = (
+    tripId: string,
+  ): Effect.Effect<ItineraryItem[], AppError> =>
+    Effect.tryPromise({
+      try: async () => {
+        const collected: ItineraryItem[] = [];
+        let exclusiveStartKey:
+          | Record<string, NativeAttributeValue>
+          | undefined;
+        do {
+          const result = await client.send(
+            new QueryCommand({
+              TableName: tableName,
+              KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+              ExpressionAttributeValues: {
+                ":pk": tripItemsPk(tripId),
+                ":sk": "ITEM#",
+              },
+              ExclusiveStartKey: exclusiveStartKey,
+            }),
+          );
+          for (const raw of result.Items ?? []) {
+            collected.push(dynamoItemToDomain(raw as DynamoItineraryItem));
+          }
+          exclusiveStartKey = result.LastEvaluatedKey;
+        } while (exclusiveStartKey !== undefined);
+        return sortItemsBySortKey(collected);
+      },
+      catch: mapDynamoError,
+    });
+
+  const getDynamoItem = (
+    tripId: string,
+    itemId: string,
+  ): Effect.Effect<DynamoItineraryItem | undefined, AppError> =>
+    Effect.tryPromise({
+      try: async () => {
+        const result = await client.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: tripItemsPk(tripId), SK: itemSk(itemId) },
+          }),
+        );
+        if (result.Item === undefined) {
+          return undefined;
+        }
+        return result.Item as DynamoItineraryItem;
       },
       catch: mapDynamoError,
     });
@@ -264,6 +554,32 @@ export function makeDynamoTripRepo(
           exclusiveStartKey = result.LastEvaluatedKey;
         } while (exclusiveStartKey !== undefined);
         return count;
+      },
+      catch: mapDynamoError,
+    });
+
+  const putItemSortKeysChunk = (
+    tripId: string,
+    assignments: readonly { itemId: string; sortKey: number }[],
+    updatedAt: string,
+  ): Effect.Effect<void, AppError> =>
+    Effect.tryPromise({
+      try: async () => {
+        // Sequential UpdateItem within chunk (design: not one TransactWrite).
+        for (const { itemId, sortKey } of assignments) {
+          await client.send(
+            new UpdateCommand({
+              TableName: tableName,
+              Key: { PK: tripItemsPk(tripId), SK: itemSk(itemId) },
+              UpdateExpression: "SET sortKey = :sk, updatedAt = :ua",
+              ConditionExpression: "attribute_exists(PK)",
+              ExpressionAttributeValues: {
+                ":sk": sortKey,
+                ":ua": updatedAt,
+              },
+            }),
+          );
+        }
       },
       catch: mapDynamoError,
     });
@@ -324,7 +640,7 @@ export function makeDynamoTripRepo(
 
     getActiveForOwner: (ownerId, tripId) =>
       Effect.gen(function* () {
-        const item = yield* getItem(ownerId, tripId);
+        const item = yield* getTripItem(ownerId, tripId);
         if (item === undefined || !isVisibleStatus(item.status)) {
           return undefined;
         }
@@ -422,7 +738,7 @@ export function makeDynamoTripRepo(
 
     update: (ownerId, tripId, expectedVersion, patch) =>
       Effect.gen(function* () {
-        const existingItem = yield* getItem(ownerId, tripId);
+        const existingItem = yield* getTripItem(ownerId, tripId);
         if (
           existingItem === undefined ||
           !isVisibleStatus(existingItem.status)
@@ -478,7 +794,7 @@ export function makeDynamoTripRepo(
           const cause = write.left;
           if (cause instanceof ConditionalCheckFailedException) {
             // Re-Get current version so client If-Match is not stuck on stale.
-            const live = yield* getItem(ownerId, tripId);
+            const live = yield* getTripItem(ownerId, tripId);
             if (live === undefined || !isVisibleStatus(live.status)) {
               return yield* Effect.fail(AppError.notFound("Trip not found"));
             }
@@ -503,7 +819,7 @@ export function makeDynamoTripRepo(
 
     softDelete: (ownerId, tripId) =>
       Effect.gen(function* () {
-        const existingItem = yield* getItem(ownerId, tripId);
+        const existingItem = yield* getTripItem(ownerId, tripId);
         if (
           existingItem === undefined ||
           !isVisibleStatus(existingItem.status)
@@ -561,6 +877,314 @@ export function makeDynamoTripRepo(
           deletedAt: deletedAt as Trip["deletedAt"],
           version: existing.version + 1,
         };
+      }),
+
+    listItems: (ownerId, tripId) =>
+      Effect.gen(function* () {
+        yield* requireActiveTrip(ownerId, tripId);
+        return yield* queryAllItems(tripId);
+      }),
+
+    getItem: (ownerId, tripId, itemId) =>
+      Effect.gen(function* () {
+        yield* requireActiveTrip(ownerId, tripId);
+        const row = yield* getDynamoItem(tripId, itemId);
+        if (row === undefined) {
+          return undefined;
+        }
+        if (row.ownerId !== ownerId) {
+          return undefined;
+        }
+        return dynamoItemToDomain(row);
+      }),
+
+    createItem: (ownerId, tripId, input, options) =>
+      Effect.gen(function* () {
+        yield* requireActiveTrip(ownerId, tripId);
+
+        let idemKeyValue: string | undefined;
+        try {
+          idemKeyValue = assertIdempotencyKey(options?.idempotencyKey);
+        } catch (e) {
+          return yield* Effect.fail(
+            e instanceof AppError ? e : AppError.internal(),
+          );
+        }
+
+        if (idemKeyValue !== undefined) {
+          const existingIdem = yield* Effect.tryPromise({
+            try: async () => {
+              const result = await client.send(
+                new GetCommand({
+                  TableName: tableName,
+                  Key: {
+                    PK: idemPk(ownerId),
+                    SK: idemSk(idemKeyValue),
+                  },
+                }),
+              );
+              return result.Item as IdempotencyItem | undefined;
+            },
+            catch: mapDynamoError,
+          });
+          if (
+            existingIdem !== undefined &&
+            existingIdem.tripId === tripId &&
+            existingIdem.itemSnapshot !== undefined
+          ) {
+            return existingIdem.itemSnapshot;
+          }
+        }
+
+        const existing = yield* queryAllItems(tripId);
+        if (existing.length >= MAX_ITEMS_PER_TRIP) {
+          return yield* Effect.fail(
+            AppError.validation(
+              `Item limit reached (max ${MAX_ITEMS_PER_TRIP} per trip)`,
+              { maxItems: MAX_ITEMS_PER_TRIP },
+            ),
+          );
+        }
+
+        let item: ItineraryItem;
+        try {
+          const sortKey = nextAppendSortKey(existing.map((i) => i.sortKey));
+          item = buildCreatedItem(tripId, input, sortKey);
+        } catch (e) {
+          return yield* Effect.fail(
+            e instanceof AppError ? e : AppError.internal(),
+          );
+        }
+
+        const row = domainItemToDynamo(ownerId, item);
+        yield* Effect.tryPromise({
+          try: () =>
+            client.send(
+              new PutCommand({
+                TableName: tableName,
+                Item: row,
+                ConditionExpression:
+                  "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+              }),
+            ),
+          catch: mapDynamoError,
+        });
+
+        if (idemKeyValue !== undefined) {
+          const ttl =
+            Math.floor(Date.now() / 1000) + IDEMPOTENCY_TTL_SECONDS;
+          const idemRow: IdempotencyItem = {
+            PK: idemPk(ownerId),
+            SK: idemSk(idemKeyValue),
+            entityType: "IDEM",
+            tripId,
+            itemSnapshot: item,
+            ttl,
+          };
+          // Best-effort: if concurrent create already wrote the key, ignore.
+          yield* Effect.tryPromise({
+            try: () =>
+              client.send(
+                new PutCommand({
+                  TableName: tableName,
+                  Item: idemRow,
+                  ConditionExpression: "attribute_not_exists(PK)",
+                }),
+              ),
+            catch: () => undefined,
+          }).pipe(Effect.catchAll(() => Effect.void));
+        }
+
+        return item;
+      }),
+
+    updateItem: (ownerId, tripId, itemId, expectedVersion, patch) =>
+      Effect.gen(function* () {
+        yield* requireActiveTrip(ownerId, tripId);
+        const row = yield* getDynamoItem(tripId, itemId);
+        if (row === undefined || row.ownerId !== ownerId) {
+          return yield* Effect.fail(AppError.notFound("Item not found"));
+        }
+        const existing = dynamoItemToDomain(row);
+        if (existing.version !== expectedVersion) {
+          return yield* Effect.fail(
+            AppError.conflict("Version mismatch", {
+              version: existing.version,
+            }),
+          );
+        }
+
+        let updated: ItineraryItem;
+        try {
+          updated = applyItemPatch(existing, patch);
+        } catch (e) {
+          return yield* Effect.fail(
+            e instanceof AppError ? e : AppError.internal(),
+          );
+        }
+
+        const dynamoRow = domainItemToDynamo(ownerId, updated);
+        const write = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new PutCommand({
+                  TableName: tableName,
+                  Item: dynamoRow,
+                  ConditionExpression: "#ver = :ev AND attribute_exists(PK)",
+                  ExpressionAttributeNames: { "#ver": "version" },
+                  // Condition uses old version still on item — Put replaces whole item.
+                  // We need expectedVersion in condition, not new version.
+                  ExpressionAttributeValues: {
+                    ":ev": expectedVersion,
+                  },
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
+
+        if (Either.isLeft(write)) {
+          const cause = write.left;
+          if (cause instanceof ConditionalCheckFailedException) {
+            const live = yield* getDynamoItem(tripId, itemId);
+            if (live === undefined || live.ownerId !== ownerId) {
+              return yield* Effect.fail(AppError.notFound("Item not found"));
+            }
+            return yield* Effect.fail(
+              AppError.conflict("Version mismatch", {
+                version: live.version,
+              }),
+            );
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
+
+        return updated;
+      }),
+
+    deleteItem: (ownerId, tripId, itemId) =>
+      Effect.gen(function* () {
+        yield* requireActiveTrip(ownerId, tripId);
+        const row = yield* getDynamoItem(tripId, itemId);
+        if (row === undefined || row.ownerId !== ownerId) {
+          return yield* Effect.fail(AppError.notFound("Item not found"));
+        }
+        yield* Effect.tryPromise({
+          try: () =>
+            client.send(
+              new DeleteCommand({
+                TableName: tableName,
+                Key: { PK: tripItemsPk(tripId), SK: itemSk(itemId) },
+                ConditionExpression: "attribute_exists(PK)",
+              }),
+            ),
+          catch: (cause) => {
+            if (cause instanceof ConditionalCheckFailedException) {
+              return AppError.notFound("Item not found");
+            }
+            return mapDynamoError(cause);
+          },
+        });
+      }),
+
+    reorderItems: (ownerId, tripId, expectedTripVersion, itemIds) =>
+      Effect.gen(function* () {
+        const tripItem = yield* getTripItem(ownerId, tripId);
+        if (tripItem === undefined || !isVisibleStatus(tripItem.status)) {
+          return yield* Effect.fail(AppError.notFound("Trip not found"));
+        }
+        const trip = itemToTrip(tripItem);
+        if (trip.version !== expectedTripVersion) {
+          return yield* Effect.fail(
+            AppError.conflict("Version mismatch", {
+              version: trip.version,
+            }),
+          );
+        }
+
+        const current = yield* queryAllItems(tripId);
+        const currentIds = new Set(current.map((i) => i.itemId));
+        if (!isFullPermutation(itemIds, currentIds)) {
+          return yield* Effect.fail(
+            AppError.validation(
+              "itemIds must be a full permutation of the trip's items",
+            ),
+          );
+        }
+
+        const newVersion = trip.version + 1;
+        // Trip-level lock: bump version first (abort on CCF).
+        const bump = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new UpdateCommand({
+                  TableName: tableName,
+                  Key: { PK: userPk(ownerId), SK: tripSk(tripId) },
+                  UpdateExpression: "SET #ver = :nv",
+                  ConditionExpression: "#ver = :ev AND #status = :active",
+                  ExpressionAttributeNames: {
+                    "#ver": "version",
+                    "#status": "status",
+                  },
+                  ExpressionAttributeValues: {
+                    ":nv": newVersion,
+                    ":ev": expectedTripVersion,
+                    ":active": "active",
+                  },
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
+
+        if (Either.isLeft(bump)) {
+          const cause = bump.left;
+          if (cause instanceof ConditionalCheckFailedException) {
+            const live = yield* getTripItem(ownerId, tripId);
+            if (live === undefined || !isVisibleStatus(live.status)) {
+              return yield* Effect.fail(AppError.notFound("Trip not found"));
+            }
+            return yield* Effect.fail(
+              AppError.conflict("Version mismatch", {
+                version: live.version,
+              }),
+            );
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
+
+        const assignments = computeReorderSortKeys(itemIds);
+        const updatedAt = normalizeInstant(new Date().toISOString());
+        const chunks = chunkArray(assignments, REORDER_CHUNK_SIZE);
+
+        // Apply chunks sequentially; on failure retry remaining once.
+        for (let i = 0; i < chunks.length; i += 1) {
+          const chunk = chunks[i];
+          if (chunk === undefined) {
+            continue;
+          }
+          const first = yield* Effect.either(
+            putItemSortKeysChunk(tripId, chunk, updatedAt),
+          );
+          if (Either.isLeft(first)) {
+            const retry = yield* Effect.either(
+              putItemSortKeysChunk(tripId, chunk, updatedAt),
+            );
+            if (Either.isLeft(retry)) {
+              // Trip version already bumped — leave as-is (design partial failure).
+              return yield* Effect.fail(mapDynamoError(retry.left));
+            }
+          }
+        }
+
+        const items = yield* queryAllItems(tripId);
+        const result: ReorderItemsResult = {
+          trip: { ...trip, version: newVersion },
+          items,
+        };
+        return result;
       }),
   };
 }

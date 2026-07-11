@@ -27,6 +27,12 @@ import { UserRepo, type UserRepository } from "./repos/user-repo.js";
 import { handleHealth } from "./routes/health.js";
 import { handleMe } from "./routes/me.js";
 import {
+  handleCreateItem,
+  handleDeleteItem,
+  handlePatchItem,
+  handleReorderItems,
+} from "./routes/items.js";
+import {
   handleCreateTrip,
   handleExportTrip,
   handleGetTrip,
@@ -90,6 +96,32 @@ export function buildRoutes(
       path: "/api/v1/trips/:tripId/export",
       authClass: "owner",
       handler: handleExportTrip,
+    },
+    // Item routes before bare :tripId only where path length differs;
+    // reorder is a static leaf under /items.
+    {
+      method: "POST",
+      path: "/api/v1/trips/:tripId/items/reorder",
+      authClass: "owner",
+      handler: handleReorderItems,
+    },
+    {
+      method: "POST",
+      path: "/api/v1/trips/:tripId/items",
+      authClass: "owner",
+      handler: handleCreateItem,
+    },
+    {
+      method: "PATCH",
+      path: "/api/v1/trips/:tripId/items/:itemId",
+      authClass: "owner",
+      handler: handlePatchItem,
+    },
+    {
+      method: "DELETE",
+      path: "/api/v1/trips/:tripId/items/:itemId",
+      authClass: "owner",
+      handler: handleDeleteItem,
     },
     {
       method: "GET",

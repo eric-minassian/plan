@@ -124,6 +124,71 @@ describeIt("DynamoDB trip access patterns (1, 2a)", () => {
   });
 });
 
+describeIt("DynamoDB item access patterns (2b, create, reorder)", () => {
+  const table = tableName as string;
+  const repo = makeDynamoTripRepo(table);
+  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+
+  it("create items + list ordered by sortKey; SK is ITEM#itemId only", async () => {
+    const ownerId = `it-items-${crypto.randomUUID()}`;
+    const trip = await Effect.runPromise(
+      repo.create(ownerId, {
+        title: "Items IT",
+        timezone: "UTC",
+        startDate: "2026-01-01",
+        endDate: "2026-01-05",
+      }),
+    );
+
+    const a = await Effect.runPromise(
+      repo.createItem(ownerId, trip.tripId, {
+        type: "note",
+        title: "A",
+        details: {},
+      }),
+    );
+    const b = await Effect.runPromise(
+      repo.createItem(ownerId, trip.tripId, {
+        type: "note",
+        title: "B",
+        details: {},
+      }),
+    );
+    expect(a.sortKey).toBe(1000);
+    expect(b.sortKey).toBe(2000);
+
+    const raw = await doc.send(
+      new GetCommand({
+        TableName: table,
+        Key: {
+          PK: `TRIP#${trip.tripId}`,
+          SK: `ITEM#${a.itemId}`,
+        },
+      }),
+    );
+    expect(raw.Item?.SK).toBe(`ITEM#${a.itemId}`);
+    expect(raw.Item?.sortKey).toBe(1000);
+    expect(raw.Item?.ownerId).toBe(ownerId);
+    // Never encode sortKey in SK
+    expect(String(raw.Item?.SK)).not.toContain("1000");
+
+    const listed = await Effect.runPromise(
+      repo.listItems(ownerId, trip.tripId),
+    );
+    expect(listed.map((i) => i.title)).toEqual(["A", "B"]);
+
+    const reordered = await Effect.runPromise(
+      repo.reorderItems(ownerId, trip.tripId, trip.version, [
+        b.itemId,
+        a.itemId,
+      ]),
+    );
+    expect(reordered.trip.version).toBe(trip.version + 1);
+    expect(reordered.items.map((i) => i.itemId)).toEqual([b.itemId, a.itemId]);
+    expect(reordered.items.map((i) => i.sortKey)).toEqual([1000, 2000]);
+  });
+});
+
 describe("DynamoDB trip IT gate", () => {
   it("documents TRIPPLAN_IT_TABLE skip behavior", () => {
     if (tableName === undefined || tableName.length === 0) {
