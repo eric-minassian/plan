@@ -62,6 +62,12 @@ export function fromApiGatewayEvent(
     body = Buffer.from(body, "base64").toString("utf8");
   }
 
+  const clientIp =
+    event.requestContext.http.sourceIp !== undefined &&
+    event.requestContext.http.sourceIp.length > 0
+      ? event.requestContext.http.sourceIp
+      : "unknown";
+
   return {
     method,
     path,
@@ -71,6 +77,7 @@ export function fromApiGatewayEvent(
     cookies,
     body,
     requestId,
+    clientIp,
   };
 }
 
@@ -80,6 +87,10 @@ export function toApiGatewayResult(
   return {
     statusCode: response.status,
     headers: response.headers as Record<string, string> | undefined,
+    cookies:
+      response.cookies !== undefined && response.cookies.length > 0
+        ? [...response.cookies]
+        : undefined,
     body: response.body,
   };
 }
