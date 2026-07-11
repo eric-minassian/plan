@@ -47,9 +47,23 @@ export const API_P95_ALARM_THRESHOLD_MS = 3000;
 /** Min HTTP API Count in a 5m period before 5xx rate% is evaluated. */
 export const API_5XX_MIN_REQUESTS = 20;
 
+/** WebACL resource name (CFN / console). Not used as CW dimension. */
 const WEB_ACL_NAME = (stage: Stage): string => `tripplan-${stage}-api`;
+/** Rule resource names (CFN). Not used as CW Rule dimension. */
 const WAF_RATE_RULE_NAME = "RateLimitByIp";
 const WAF_MANAGED_COMMON_RULE_NAME = "AWSManagedRulesCommonRuleSet";
+
+/**
+ * AWS/WAFV2 CloudWatch dimensions WebACL and Rule must match VisibilityConfig
+ * metricName values — not the WebACL/rule resource names.
+ * @see https://docs.aws.amazon.com/waf/latest/developerguide/waf-metrics.html
+ */
+const wafVisibilityMetrics = (stage: Stage) =>
+  ({
+    webAcl: `tripplan-${stage}-api-waf`,
+    rateRule: `tripplan-${stage}-waf-rate`,
+    commonRuleSet: `tripplan-${stage}-waf-common`,
+  }) as const;
 
 /**
  * Ops plane: CloudWatch dashboard + alarms, AWS Budgets, WAF rate ACL,
@@ -69,6 +83,7 @@ export class ObservabilityStack extends cdk.Stack {
     const { stage, apiFunction, httpApi } = props;
     const prod = isProdStage(stage);
     const webAclName = WEB_ACL_NAME(stage);
+    const wafMetrics = wafVisibilityMetrics(stage);
 
     this.alarmTopic = new sns.Topic(this, "AlarmTopic", {
       topicName: `tripplan-alarms-${stage}`,
@@ -317,7 +332,7 @@ export class ObservabilityStack extends cdk.Stack {
       defaultAction: { allow: {} },
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
-        metricName: `tripplan-${stage}-api-waf`,
+        metricName: wafMetrics.webAcl,
         sampledRequestsEnabled: true,
       },
       rules: [
@@ -334,7 +349,7 @@ export class ObservabilityStack extends cdk.Stack {
           },
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
-            metricName: `tripplan-${stage}-waf-common`,
+            metricName: wafMetrics.commonRuleSet,
             sampledRequestsEnabled: true,
           },
         },
@@ -352,7 +367,7 @@ export class ObservabilityStack extends cdk.Stack {
           },
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
-            metricName: `tripplan-${stage}-waf-rate`,
+            metricName: wafMetrics.rateRule,
             sampledRequestsEnabled: true,
           },
         },
@@ -372,13 +387,13 @@ export class ObservabilityStack extends cdk.Stack {
       webAclArn: this.webAcl.attrArn,
     });
 
-    // WAFV2 metrics (REGIONAL): dimensions WebACL, Region, Rule
+    // WAFV2 metrics (REGIONAL): WebACL + Rule dimensions = VisibilityConfig metricNames
     const wafRegion = cdk.Stack.of(this).region;
     const wafBlockedAll = new cloudwatch.Metric({
       namespace: "AWS/WAFV2",
       metricName: "BlockedRequests",
       dimensionsMap: {
-        WebACL: webAclName,
+        WebACL: wafMetrics.webAcl,
         Region: wafRegion,
         Rule: "ALL",
       },
@@ -389,7 +404,7 @@ export class ObservabilityStack extends cdk.Stack {
       namespace: "AWS/WAFV2",
       metricName: "AllowedRequests",
       dimensionsMap: {
-        WebACL: webAclName,
+        WebACL: wafMetrics.webAcl,
         Region: wafRegion,
         Rule: "ALL",
       },
@@ -400,9 +415,9 @@ export class ObservabilityStack extends cdk.Stack {
       namespace: "AWS/WAFV2",
       metricName: "BlockedRequests",
       dimensionsMap: {
-        WebACL: webAclName,
+        WebACL: wafMetrics.webAcl,
         Region: wafRegion,
-        Rule: WAF_RATE_RULE_NAME,
+        Rule: wafMetrics.rateRule,
       },
       period: cdk.Duration.minutes(5),
       statistic: "Sum",
@@ -411,9 +426,9 @@ export class ObservabilityStack extends cdk.Stack {
       namespace: "AWS/WAFV2",
       metricName: "CountedRequests",
       dimensionsMap: {
-        WebACL: webAclName,
+        WebACL: wafMetrics.webAcl,
         Region: wafRegion,
-        Rule: WAF_MANAGED_COMMON_RULE_NAME,
+        Rule: wafMetrics.commonRuleSet,
       },
       period: cdk.Duration.minutes(5),
       statistic: "Sum",
@@ -535,7 +550,9 @@ export class ObservabilityStack extends cdk.Stack {
         left: [
           wafAllowedAll.with({ label: "Allowed (ALL)" }),
           wafBlockedAll.with({ label: "Blocked (ALL)" }),
-          wafBlockedRateRule.with({ label: `Blocked (${WAF_RATE_RULE_NAME})` }),
+          wafBlockedRateRule.with({
+            label: `Blocked (${wafMetrics.rateRule})`,
+          }),
         ],
         leftYAxis: { label: "requests", min: 0 },
       }),
@@ -545,7 +562,7 @@ export class ObservabilityStack extends cdk.Stack {
         height: 6,
         left: [
           wafCountedCommon.with({
-            label: `Counted (${WAF_MANAGED_COMMON_RULE_NAME})`,
+            label: `Counted (${wafMetrics.commonRuleSet})`,
           }),
         ],
         leftYAxis: { label: "requests", min: 0 },
