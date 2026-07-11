@@ -105,6 +105,21 @@ async function createItem(
   );
 }
 
+/** Current trip version (create/delete items bump trip version). */
+async function tripVersion(
+  tripRepo: ReturnType<typeof makeInMemoryTripRepo>,
+  tripId: string,
+): Promise<number> {
+  const got = await Effect.runPromise(
+    handleRequest(
+      baseRequest({ method: "GET", path: `/api/v1/trips/${tripId}` }),
+      deps(tripRepo),
+    ),
+  );
+  expect(got.status).toBe(200);
+  return (JSON.parse(got.body ?? "{}") as { version: number }).version;
+}
+
 describe("itinerary item CRUD + reorder", () => {
   it("POST creates item with server itemId, sortKey, version; GET trip orders by sortKey", async () => {
     const { tripRepo, tripId } = await createTrip();
@@ -145,25 +160,73 @@ describe("itinerary item CRUD + reorder", () => {
     expect(detail.items.map((i) => i.sortKey)).toEqual([1000, 2000]);
   });
 
-  it("optional Idempotency-Key replays same item; rejects key > 128", async () => {
+  it("optional Idempotency-Key replays live item; rejects key > 128; cross-trip 409", async () => {
     const { tripRepo, tripId } = await createTrip();
     const first = await createItem(tripRepo, tripId, noteBody("Idem"), {
       "idempotency-key": "key-1",
     });
     expect(first.status).toBe(201);
-    const firstBody = JSON.parse(first.body ?? "{}") as { itemId: string };
+    const firstBody = JSON.parse(first.body ?? "{}") as {
+      itemId: string;
+      version: number;
+    };
+
+    // PATCH then replay → live version/title (not create-time snapshot).
+    const patched = await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "PATCH",
+          path: `/api/v1/trips/${tripId}/items/${firstBody.itemId}`,
+          headers: { "if-match": `"${firstBody.version}"` },
+          body: JSON.stringify({ title: "Patched title" }),
+        }),
+        deps(tripRepo),
+      ),
+    );
+    expect(patched.status).toBe(200);
 
     const second = await createItem(tripRepo, tripId, noteBody("Idem other"), {
       "idempotency-key": "key-1",
     });
     expect(second.status).toBe(201);
-    const secondBody = JSON.parse(second.body ?? "{}") as { itemId: string };
+    const secondBody = JSON.parse(second.body ?? "{}") as {
+      itemId: string;
+      title: string;
+      version: number;
+    };
     expect(secondBody.itemId).toBe(firstBody.itemId);
+    expect(secondBody.title).toBe("Patched title");
+    expect(secondBody.version).toBe(2);
 
     const tooLong = await createItem(tripRepo, tripId, noteBody("X"), {
       "idempotency-key": "k".repeat(129),
     });
     expect(tooLong.status).toBe(400);
+
+    // Same key on another trip → 409 (do not create a second item).
+    const otherTrip = await createTrip(tripRepo);
+    const cross = await createItem(
+      tripRepo,
+      otherTrip.tripId,
+      noteBody("Cross"),
+      { "idempotency-key": "key-1" },
+    );
+    expect(cross.status).toBe(409);
+
+    // After delete, replay → 404 (no ghost snapshot).
+    await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "DELETE",
+          path: `/api/v1/trips/${tripId}/items/${firstBody.itemId}`,
+        }),
+        deps(tripRepo),
+      ),
+    );
+    const afterDelete = await createItem(tripRepo, tripId, noteBody("Gone"), {
+      "idempotency-key": "key-1",
+    });
+    expect(afterDelete.status).toBe(404);
   });
 
   it("enforces max 100 items per trip", async () => {
@@ -321,7 +384,7 @@ describe("itinerary item CRUD + reorder", () => {
   });
 
   it("reorder: full permutation, trip If-Match, sortKeys 1000/2000/…, 409 stale trip", async () => {
-    const { tripRepo, tripId, version } = await createTrip();
+    const { tripRepo, tripId } = await createTrip();
     const ids: string[] = [];
     for (const title of ["A", "B", "C"]) {
       const res = await createItem(tripRepo, tripId, noteBody(title));
@@ -329,6 +392,9 @@ describe("itinerary item CRUD + reorder", () => {
         (JSON.parse(res.body ?? "{}") as { itemId: string }).itemId,
       );
     }
+    // Creates bump trip version (1 → 4 after 3 items).
+    const version = await tripVersion(tripRepo, tripId);
+    expect(version).toBe(4);
 
     const reversed = [...ids].reverse();
     const reordered = await Effect.runPromise(
@@ -393,8 +459,97 @@ describe("itinerary item CRUD + reorder", () => {
     expect(bad.status).toBe(400);
   });
 
+  it("PATCH after reorder preserves sortKey (does not clobber)", async () => {
+    const { tripRepo, tripId } = await createTrip();
+    const ids: string[] = [];
+    for (const title of ["A", "B"]) {
+      const res = await createItem(tripRepo, tripId, noteBody(title));
+      ids.push(
+        (JSON.parse(res.body ?? "{}") as { itemId: string }).itemId,
+      );
+    }
+    const v = await tripVersion(tripRepo, tripId);
+    const reversed = [...ids].reverse();
+    const reordered = await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "POST",
+          path: `/api/v1/trips/${tripId}/items/reorder`,
+          headers: { "if-match": `"${v}"` },
+          body: JSON.stringify({ itemIds: reversed }),
+        }),
+        deps(tripRepo),
+      ),
+    );
+    expect(reordered.status).toBe(200);
+    const order = JSON.parse(reordered.body ?? "{}") as {
+      items: { itemId: string; sortKey: number; version: number }[];
+    };
+    const first = order.items[0];
+    if (first === undefined) {
+      throw new Error("expected item");
+    }
+    expect(first.sortKey).toBe(1000);
+
+    const patch = await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "PATCH",
+          path: `/api/v1/trips/${tripId}/items/${first.itemId}`,
+          headers: { "if-match": `"${first.version}"` },
+          body: JSON.stringify({ title: "Renamed" }),
+        }),
+        deps(tripRepo),
+      ),
+    );
+    expect(patch.status).toBe(200);
+    const patched = JSON.parse(patch.body ?? "{}") as {
+      title: string;
+      sortKey: number;
+    };
+    expect(patched.title).toBe("Renamed");
+    expect(patched.sortKey).toBe(1000);
+  });
+
+  it("create/delete bump trip version so stale reorder If-Match fails", async () => {
+    const { tripRepo, tripId, version: v0 } = await createTrip();
+    expect(v0).toBe(1);
+    const a = await createItem(tripRepo, tripId, noteBody("A"));
+    const b = await createItem(tripRepo, tripId, noteBody("B"));
+    const idA = (JSON.parse(a.body ?? "{}") as { itemId: string }).itemId;
+    const idB = (JSON.parse(b.body ?? "{}") as { itemId: string }).itemId;
+    const afterCreates = await tripVersion(tripRepo, tripId);
+    expect(afterCreates).toBe(3);
+
+    // Stale If-Match from before creates → 409
+    const stale = await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "POST",
+          path: `/api/v1/trips/${tripId}/items/reorder`,
+          headers: { "if-match": `"${v0}"` },
+          body: JSON.stringify({ itemIds: [idB, idA] }),
+        }),
+        deps(tripRepo),
+      ),
+    );
+    expect(stale.status).toBe(409);
+
+    await Effect.runPromise(
+      handleRequest(
+        baseRequest({
+          method: "DELETE",
+          path: `/api/v1/trips/${tripId}/items/${idB}`,
+        }),
+        deps(tripRepo),
+      ),
+    );
+    const afterDelete = await tripVersion(tripRepo, tripId);
+    expect(afterDelete).toBe(4);
+  });
+
   it("reorder 100 items in-memory (chunk algorithm path)", async () => {
-    const { tripRepo, tripId, version } = await createTrip();
+    const { tripRepo, tripId } = await createTrip();
     const ids: string[] = [];
     for (let i = 0; i < 100; i += 1) {
       const res = await createItem(tripRepo, tripId, noteBody(`N${i}`));
@@ -403,6 +558,8 @@ describe("itinerary item CRUD + reorder", () => {
         (JSON.parse(res.body ?? "{}") as { itemId: string }).itemId,
       );
     }
+    const version = await tripVersion(tripRepo, tripId);
+    expect(version).toBe(101); // 1 + 100 creates
     const permuted = [...ids].reverse();
     const res = await Effect.runPromise(
       handleRequest(

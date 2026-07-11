@@ -432,3 +432,32 @@ describe("domainItemToDynamo / dynamoItemToDomain", () => {
     expect(back.notes).toBe("body");
   });
 });
+
+describe("buildItemPatchUpdateExpression never writes sortKey", () => {
+  it("SET expression omits sortKey", async () => {
+    const { buildItemPatchUpdateExpression } = await import("./item-build.js");
+    const existing = {
+      itemId: "i1",
+      tripId: "t1",
+      type: "note" as const,
+      title: "Old",
+      details: {},
+      sortKey: 5000,
+      version: 1,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+    };
+    const parts = buildItemPatchUpdateExpression(
+      existing,
+      { title: "New" },
+      1,
+      "2026-07-10T13:00:00Z",
+    );
+    expect(parts.updateExpression).toContain("title = :title");
+    expect(parts.updateExpression).not.toMatch(/sortKey/i);
+    expect(Object.keys(parts.expressionAttributeValues).join(",")).not.toMatch(
+      /sortKey/i,
+    );
+    expect(parts.newVersion).toBe(2);
+  });
+});

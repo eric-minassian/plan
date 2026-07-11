@@ -3,19 +3,23 @@ import { normalizeInstant } from "@tripplan/domain";
 import {
   ConditionalCheckFailedException,
   DynamoDBClient,
+  TransactionCanceledException,
 } from "@aws-sdk/client-dynamodb";
 import {
-  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
   QueryCommand,
+  TransactWriteCommand,
   UpdateCommand,
   type NativeAttributeValue,
 } from "@aws-sdk/lib-dynamodb";
 import { Effect, Either } from "effect";
 import { AppError, internalFromCause } from "../errors/app-error.js";
-import { applyItemPatch, buildCreatedItem } from "./item-build.js";
+import {
+  buildCreatedItem,
+  buildItemPatchUpdateExpression,
+} from "./item-build.js";
 import {
   MAX_IDEMPOTENCY_KEY_LENGTH,
   MAX_ITEMS_PER_TRIP,
@@ -81,13 +85,19 @@ export interface DynamoItineraryItem {
   readonly updatedAt: string;
 }
 
-/** Idempotency record for POST items. TTL 24h. */
+/**
+ * Idempotency claim for POST items (TTL 24h).
+ * Stores itemId + completed flag — replay re-reads the live item (not a snapshot).
+ * completed=true + missing item → 404 (delete after create); completed=false → finish create.
+ */
 export interface IdempotencyItem {
   readonly PK: string;
   readonly SK: string;
   readonly entityType: "IDEM";
   readonly tripId: string;
-  readonly itemSnapshot: ItineraryItem;
+  readonly itemId: string;
+  /** true once the item Put succeeded */
+  readonly completed: boolean;
   readonly ttl: number;
 }
 
@@ -879,9 +889,11 @@ export function makeDynamoTripRepo(
         };
       }),
 
-    listItems: (ownerId, tripId) =>
+    listItems: (ownerId, tripId, options) =>
       Effect.gen(function* () {
-        yield* requireActiveTrip(ownerId, tripId);
+        if (options?.tripAlreadyVerified !== true) {
+          yield* requireActiveTrip(ownerId, tripId);
+        }
         return yield* queryAllItems(tripId);
       }),
 
@@ -911,15 +923,17 @@ export function makeDynamoTripRepo(
           );
         }
 
-        if (idemKeyValue !== undefined) {
-          const existingIdem = yield* Effect.tryPromise({
+        const loadIdem = (
+          key: string,
+        ): Effect.Effect<IdempotencyItem | undefined, AppError> =>
+          Effect.tryPromise({
             try: async () => {
               const result = await client.send(
                 new GetCommand({
                   TableName: tableName,
                   Key: {
                     PK: idemPk(ownerId),
-                    SK: idemSk(idemKeyValue),
+                    SK: idemSk(key),
                   },
                 }),
               );
@@ -927,16 +941,31 @@ export function makeDynamoTripRepo(
             },
             catch: mapDynamoError,
           });
-          if (
-            existingIdem !== undefined &&
-            existingIdem.tripId === tripId &&
-            existingIdem.itemSnapshot !== undefined
-          ) {
-            return existingIdem.itemSnapshot;
+
+        if (idemKeyValue !== undefined) {
+          const existingIdem = yield* loadIdem(idemKeyValue);
+          if (existingIdem !== undefined) {
+            if (existingIdem.tripId !== tripId) {
+              return yield* Effect.fail(
+                AppError.conflict(
+                  "Idempotency-Key already used for a different trip",
+                  { tripId: existingIdem.tripId },
+                ),
+              );
+            }
+            const row = yield* getDynamoItem(tripId, existingIdem.itemId);
+            if (row !== undefined && row.ownerId === ownerId) {
+              return dynamoItemToDomain(row);
+            }
+            // Completed + missing (deleted) → 404. Incomplete → finish below.
+            if (existingIdem.completed) {
+              return yield* Effect.fail(AppError.notFound("Item not found"));
+            }
           }
         }
 
         const existing = yield* queryAllItems(tripId);
+        // Best-effort under concurrent creates; serial path hard-rejects at 100.
         if (existing.length >= MAX_ITEMS_PER_TRIP) {
           return yield* Effect.fail(
             AppError.validation(
@@ -946,10 +975,81 @@ export function makeDynamoTripRepo(
           );
         }
 
+        // Prefer reserved itemId from an existing claim (partial prior create).
+        let itemId: string = crypto.randomUUID();
+        if (idemKeyValue !== undefined) {
+          const claim = yield* loadIdem(idemKeyValue);
+          if (claim !== undefined) {
+            if (claim.tripId !== tripId) {
+              return yield* Effect.fail(
+                AppError.conflict(
+                  "Idempotency-Key already used for a different trip",
+                  { tripId: claim.tripId },
+                ),
+              );
+            }
+            itemId = claim.itemId;
+          } else {
+            // Claim key first so concurrent creates share itemId.
+            const ttl =
+              Math.floor(Date.now() / 1000) + IDEMPOTENCY_TTL_SECONDS;
+            const idemRow: IdempotencyItem = {
+              PK: idemPk(ownerId),
+              SK: idemSk(idemKeyValue),
+              entityType: "IDEM",
+              tripId,
+              itemId,
+              completed: false,
+              ttl,
+            };
+            const claimWrite = yield* Effect.either(
+              Effect.tryPromise({
+                try: () =>
+                  client.send(
+                    new PutCommand({
+                      TableName: tableName,
+                      Item: idemRow,
+                      ConditionExpression: "attribute_not_exists(PK)",
+                    }),
+                  ),
+                catch: (cause) => cause,
+              }),
+            );
+            if (Either.isLeft(claimWrite)) {
+              const cause = claimWrite.left;
+              if (cause instanceof ConditionalCheckFailedException) {
+                const winner = yield* loadIdem(idemKeyValue);
+                if (winner === undefined) {
+                  return yield* Effect.fail(AppError.internal());
+                }
+                if (winner.tripId !== tripId) {
+                  return yield* Effect.fail(
+                    AppError.conflict(
+                      "Idempotency-Key already used for a different trip",
+                      { tripId: winner.tripId },
+                    ),
+                  );
+                }
+                const live = yield* getDynamoItem(tripId, winner.itemId);
+                if (live !== undefined && live.ownerId === ownerId) {
+                  return dynamoItemToDomain(live);
+                }
+                if (winner.completed) {
+                  return yield* Effect.fail(AppError.notFound("Item not found"));
+                }
+                // Winner claimed but item not written yet — finish with reserved id.
+                itemId = winner.itemId;
+              } else {
+                return yield* Effect.fail(mapDynamoError(cause));
+              }
+            }
+          }
+        }
+
         let item: ItineraryItem;
         try {
           const sortKey = nextAppendSortKey(existing.map((i) => i.sortKey));
-          item = buildCreatedItem(tripId, input, sortKey);
+          item = buildCreatedItem(tripId, input, sortKey, itemId);
         } catch (e) {
           return yield* Effect.fail(
             e instanceof AppError ? e : AppError.internal(),
@@ -957,41 +1057,81 @@ export function makeDynamoTripRepo(
         }
 
         const row = domainItemToDynamo(ownerId, item);
-        yield* Effect.tryPromise({
-          try: () =>
-            client.send(
-              new PutCommand({
-                TableName: tableName,
-                Item: row,
-                ConditionExpression:
-                  "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-              }),
-            ),
-          catch: mapDynamoError,
-        });
+        // Bump trip version + Put item so reorder If-Match covers item-set mutations.
+        const tx = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new TransactWriteCommand({
+                  TransactItems: [
+                    {
+                      Update: {
+                        TableName: tableName,
+                        Key: {
+                          PK: userPk(ownerId),
+                          SK: tripSk(tripId),
+                        },
+                        UpdateExpression: "SET #ver = #ver + :one",
+                        ConditionExpression: "#status = :active",
+                        ExpressionAttributeNames: {
+                          "#ver": "version",
+                          "#status": "status",
+                        },
+                        ExpressionAttributeValues: {
+                          ":one": 1,
+                          ":active": "active",
+                        },
+                      },
+                    },
+                    {
+                      Put: {
+                        TableName: tableName,
+                        Item: row,
+                        ConditionExpression: "attribute_not_exists(PK)",
+                      },
+                    },
+                  ],
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
 
+        if (Either.isLeft(tx)) {
+          const cause = tx.left;
+          // Item already exists (retry after claim) — return live row.
+          if (
+            cause instanceof TransactionCanceledException ||
+            (typeof cause === "object" &&
+              cause !== null &&
+              "name" in cause &&
+              (cause as { name: string }).name === "TransactionCanceledException")
+          ) {
+            const live = yield* getDynamoItem(tripId, itemId);
+            if (live !== undefined && live.ownerId === ownerId) {
+              return dynamoItemToDomain(live);
+            }
+            return yield* Effect.fail(AppError.notFound("Trip not found"));
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
+
+        // Mark idempotency claim complete so delete-then-replay returns 404.
         if (idemKeyValue !== undefined) {
-          const ttl =
-            Math.floor(Date.now() / 1000) + IDEMPOTENCY_TTL_SECONDS;
-          const idemRow: IdempotencyItem = {
-            PK: idemPk(ownerId),
-            SK: idemSk(idemKeyValue),
-            entityType: "IDEM",
-            tripId,
-            itemSnapshot: item,
-            ttl,
-          };
-          // Best-effort: if concurrent create already wrote the key, ignore.
           yield* Effect.tryPromise({
             try: () =>
               client.send(
-                new PutCommand({
+                new UpdateCommand({
                   TableName: tableName,
-                  Item: idemRow,
-                  ConditionExpression: "attribute_not_exists(PK)",
+                  Key: {
+                    PK: idemPk(ownerId),
+                    SK: idemSk(idemKeyValue),
+                  },
+                  UpdateExpression: "SET completed = :c",
+                  ExpressionAttributeValues: { ":c": true },
                 }),
               ),
-            catch: () => undefined,
+            catch: mapDynamoError,
           }).pipe(Effect.catchAll(() => Effect.void));
         }
 
@@ -1014,30 +1154,33 @@ export function makeDynamoTripRepo(
           );
         }
 
-        let updated: ItineraryItem;
+        let updateParts: ReturnType<typeof buildItemPatchUpdateExpression>;
         try {
-          updated = applyItemPatch(existing, patch);
+          // Partial UpdateExpression — never writes sortKey (reorder-safe).
+          updateParts = buildItemPatchUpdateExpression(
+            existing,
+            patch,
+            expectedVersion,
+          );
         } catch (e) {
           return yield* Effect.fail(
             e instanceof AppError ? e : AppError.internal(),
           );
         }
 
-        const dynamoRow = domainItemToDynamo(ownerId, updated);
         const write = yield* Effect.either(
           Effect.tryPromise({
             try: () =>
               client.send(
-                new PutCommand({
+                new UpdateCommand({
                   TableName: tableName,
-                  Item: dynamoRow,
+                  Key: { PK: tripItemsPk(tripId), SK: itemSk(itemId) },
+                  UpdateExpression: updateParts.updateExpression,
                   ConditionExpression: "#ver = :ev AND attribute_exists(PK)",
-                  ExpressionAttributeNames: { "#ver": "version" },
-                  // Condition uses old version still on item — Put replaces whole item.
-                  // We need expectedVersion in condition, not new version.
-                  ExpressionAttributeValues: {
-                    ":ev": expectedVersion,
-                  },
+                  ExpressionAttributeNames: updateParts.expressionAttributeNames,
+                  ExpressionAttributeValues:
+                    updateParts.expressionAttributeValues,
+                  ReturnValues: "ALL_NEW",
                 }),
               ),
             catch: (cause) => cause,
@@ -1060,7 +1203,16 @@ export function makeDynamoTripRepo(
           return yield* Effect.fail(mapDynamoError(cause));
         }
 
-        return updated;
+        const attrs = write.right.Attributes as DynamoItineraryItem | undefined;
+        if (attrs !== undefined) {
+          return dynamoItemToDomain(attrs);
+        }
+        // Fallback re-get (should be rare).
+        const live = yield* getDynamoItem(tripId, itemId);
+        if (live === undefined) {
+          return yield* Effect.fail(AppError.notFound("Item not found"));
+        }
+        return dynamoItemToDomain(live);
       }),
 
     deleteItem: (ownerId, tripId, itemId) =>
@@ -1070,26 +1222,76 @@ export function makeDynamoTripRepo(
         if (row === undefined || row.ownerId !== ownerId) {
           return yield* Effect.fail(AppError.notFound("Item not found"));
         }
-        yield* Effect.tryPromise({
-          try: () =>
-            client.send(
-              new DeleteCommand({
-                TableName: tableName,
-                Key: { PK: tripItemsPk(tripId), SK: itemSk(itemId) },
-                ConditionExpression: "attribute_exists(PK)",
-              }),
-            ),
-          catch: (cause) => {
-            if (cause instanceof ConditionalCheckFailedException) {
-              return AppError.notFound("Item not found");
-            }
-            return mapDynamoError(cause);
-          },
-        });
+        // Bump trip version + delete item so reorder If-Match covers item-set mutations.
+        const tx = yield* Effect.either(
+          Effect.tryPromise({
+            try: () =>
+              client.send(
+                new TransactWriteCommand({
+                  TransactItems: [
+                    {
+                      Update: {
+                        TableName: tableName,
+                        Key: {
+                          PK: userPk(ownerId),
+                          SK: tripSk(tripId),
+                        },
+                        UpdateExpression: "SET #ver = #ver + :one",
+                        ConditionExpression: "#status = :active",
+                        ExpressionAttributeNames: {
+                          "#ver": "version",
+                          "#status": "status",
+                        },
+                        ExpressionAttributeValues: {
+                          ":one": 1,
+                          ":active": "active",
+                        },
+                      },
+                    },
+                    {
+                      Delete: {
+                        TableName: tableName,
+                        Key: {
+                          PK: tripItemsPk(tripId),
+                          SK: itemSk(itemId),
+                        },
+                        ConditionExpression: "attribute_exists(PK)",
+                      },
+                    },
+                  ],
+                }),
+              ),
+            catch: (cause) => cause,
+          }),
+        );
+
+        if (Either.isLeft(tx)) {
+          const cause = tx.left;
+          if (
+            cause instanceof TransactionCanceledException ||
+            (typeof cause === "object" &&
+              cause !== null &&
+              "name" in cause &&
+              (cause as { name: string }).name === "TransactionCanceledException")
+          ) {
+            return yield* Effect.fail(AppError.notFound("Item not found"));
+          }
+          if (cause instanceof ConditionalCheckFailedException) {
+            return yield* Effect.fail(AppError.notFound("Item not found"));
+          }
+          return yield* Effect.fail(mapDynamoError(cause));
+        }
       }),
 
     reorderItems: (ownerId, tripId, expectedTripVersion, itemIds) =>
       Effect.gen(function* () {
+        if (itemIds.length > MAX_ITEMS_PER_TRIP) {
+          return yield* Effect.fail(
+            AppError.validation(
+              `itemIds length exceeds max items per trip (${MAX_ITEMS_PER_TRIP})`,
+            ),
+          );
+        }
         const tripItem = yield* getTripItem(ownerId, tripId);
         if (tripItem === undefined || !isVisibleStatus(tripItem.status)) {
           return yield* Effect.fail(AppError.notFound("Trip not found"));

@@ -99,25 +99,69 @@ export function buildCreatedItem(
 }
 
 /**
- * Apply a validated update patch to an existing item.
- * `type` is immutable (rejected by UpdateItineraryItem schema).
- * `details` is full-replace when present (validated against stored type).
+ * Normalize + validate a patch's optional Instant fields and full-replace details.
+ * Does not build a full item — used by Dynamo UpdateExpression (never touches sortKey).
  */
-export function applyItemPatch(
+export function resolveItemPatchFields(
   existing: ItineraryItem,
   patch: UpdateItineraryItem,
-  now: string = nowInstant(),
-): ItineraryItem {
-  const startAt =
-    patch.startAt !== undefined
-      ? normalizeOptionalInstant(patch.startAt, "startAt")
-      : existing.startAt;
-  const endAt =
-    patch.endAt !== undefined
-      ? normalizeOptionalInstant(patch.endAt, "endAt")
-      : existing.endAt;
+): {
+  readonly title?: string;
+  readonly startAt?: string;
+  readonly endAt?: string;
+  readonly startTimeZone?: string;
+  readonly endTimeZone?: string;
+  readonly startLocation?: ItineraryItem["startLocation"];
+  readonly endLocation?: ItineraryItem["endLocation"];
+  readonly notes?: string;
+  readonly confirmationCode?: string;
+  readonly enrichment?: ItineraryItem["enrichment"];
+  readonly details?: ItineraryItem["details"];
+} {
+  const out: {
+    title?: string;
+    startAt?: string;
+    endAt?: string;
+    startTimeZone?: string;
+    endTimeZone?: string;
+    startLocation?: ItineraryItem["startLocation"];
+    endLocation?: ItineraryItem["endLocation"];
+    notes?: string;
+    confirmationCode?: string;
+    enrichment?: ItineraryItem["enrichment"];
+    details?: ItineraryItem["details"];
+  } = {};
 
-  let details = existing.details;
+  if (patch.title !== undefined) {
+    out.title = patch.title;
+  }
+  if (patch.startAt !== undefined) {
+    out.startAt = normalizeOptionalInstant(patch.startAt, "startAt");
+  }
+  if (patch.endAt !== undefined) {
+    out.endAt = normalizeOptionalInstant(patch.endAt, "endAt");
+  }
+  if (patch.startTimeZone !== undefined) {
+    out.startTimeZone = patch.startTimeZone;
+  }
+  if (patch.endTimeZone !== undefined) {
+    out.endTimeZone = patch.endTimeZone;
+  }
+  if (patch.startLocation !== undefined) {
+    out.startLocation = patch.startLocation;
+  }
+  if (patch.endLocation !== undefined) {
+    out.endLocation = patch.endLocation;
+  }
+  if (patch.notes !== undefined) {
+    out.notes = patch.notes;
+  }
+  if (patch.confirmationCode !== undefined) {
+    out.confirmationCode = patch.confirmationCode;
+  }
+  if (patch.enrichment !== undefined) {
+    out.enrichment = patch.enrichment;
+  }
   if (patch.details !== undefined) {
     const decoded = decodeUpdateDetails(existing.type, patch.details);
     if (Either.isLeft(decoded)) {
@@ -126,49 +170,145 @@ export function applyItemPatch(
         field: "details",
       });
     }
-    details = decoded.right as ItineraryItem["details"];
+    out.details = decoded.right as ItineraryItem["details"];
   }
+  return out;
+}
+
+/**
+ * Build DynamoDB UpdateExpression for an item PATCH.
+ * **Never includes sortKey** so concurrent reorders are not clobbered.
+ */
+export function buildItemPatchUpdateExpression(
+  existing: ItineraryItem,
+  patch: UpdateItineraryItem,
+  expectedVersion: number,
+  now: string = nowInstant(),
+): {
+  readonly updateExpression: string;
+  readonly expressionAttributeNames: Record<string, string>;
+  readonly expressionAttributeValues: Record<string, unknown>;
+  readonly newVersion: number;
+  readonly updatedAt: string;
+} {
+  const fields = resolveItemPatchFields(existing, patch);
+  const newVersion = existing.version + 1;
+  const names: Record<string, string> = { "#ver": "version" };
+  const values: Record<string, unknown> = {
+    ":nv": newVersion,
+    ":ev": expectedVersion,
+    ":ua": now,
+  };
+  const sets: string[] = ["#ver = :nv", "updatedAt = :ua"];
+
+  if (fields.title !== undefined) {
+    sets.push("title = :title");
+    values[":title"] = fields.title;
+  }
+  if (fields.startAt !== undefined) {
+    sets.push("startAt = :startAt");
+    values[":startAt"] = fields.startAt;
+  }
+  if (fields.endAt !== undefined) {
+    sets.push("endAt = :endAt");
+    values[":endAt"] = fields.endAt;
+  }
+  if (fields.startTimeZone !== undefined) {
+    sets.push("startTimeZone = :startTimeZone");
+    values[":startTimeZone"] = fields.startTimeZone;
+  }
+  if (fields.endTimeZone !== undefined) {
+    sets.push("endTimeZone = :endTimeZone");
+    values[":endTimeZone"] = fields.endTimeZone;
+  }
+  if (fields.startLocation !== undefined) {
+    sets.push("startLocation = :startLocation");
+    values[":startLocation"] = fields.startLocation;
+  }
+  if (fields.endLocation !== undefined) {
+    sets.push("endLocation = :endLocation");
+    values[":endLocation"] = fields.endLocation;
+  }
+  if (fields.notes !== undefined) {
+    sets.push("notes = :notes");
+    values[":notes"] = fields.notes;
+  }
+  if (fields.confirmationCode !== undefined) {
+    sets.push("confirmationCode = :confirmationCode");
+    values[":confirmationCode"] = fields.confirmationCode;
+  }
+  if (fields.enrichment !== undefined) {
+    sets.push("enrichment = :enrichment");
+    values[":enrichment"] = fields.enrichment;
+  }
+  if (fields.details !== undefined) {
+    sets.push("details = :details");
+    values[":details"] = fields.details;
+  }
+
+  return {
+    updateExpression: `SET ${sets.join(", ")}`,
+    expressionAttributeNames: names,
+    expressionAttributeValues: values,
+    newVersion,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Apply a validated update patch to an existing item (in-memory path).
+ * `type` is immutable (rejected by UpdateItineraryItem schema).
+ * `details` is full-replace when present (validated against stored type).
+ * **Preserves `sortKey` from `existing`** — callers must pass the live row
+ * (or re-apply live sortKey after write) so reorder races are not clobbered.
+ */
+export function applyItemPatch(
+  existing: ItineraryItem,
+  patch: UpdateItineraryItem,
+  now: string = nowInstant(),
+): ItineraryItem {
+  const fields = resolveItemPatchFields(existing, patch);
 
   const nextBase = {
     itemId: existing.itemId,
     tripId: existing.tripId,
-    title: patch.title ?? existing.title,
+    title: fields.title ?? existing.title,
+    // Never take sortKey from the client — keep live value from existing.
     sortKey: existing.sortKey,
     version: existing.version + 1,
     createdAt: existing.createdAt,
     updatedAt: now,
-    ...(startAt !== undefined ? { startAt } : {}),
-    ...(endAt !== undefined ? { endAt } : {}),
+    startAt: fields.startAt !== undefined ? fields.startAt : existing.startAt,
+    endAt: fields.endAt !== undefined ? fields.endAt : existing.endAt,
     startTimeZone:
-      patch.startTimeZone !== undefined
-        ? patch.startTimeZone
+      fields.startTimeZone !== undefined
+        ? fields.startTimeZone
         : existing.startTimeZone,
     endTimeZone:
-      patch.endTimeZone !== undefined
-        ? patch.endTimeZone
+      fields.endTimeZone !== undefined
+        ? fields.endTimeZone
         : existing.endTimeZone,
     startLocation:
-      patch.startLocation !== undefined
-        ? patch.startLocation
+      fields.startLocation !== undefined
+        ? fields.startLocation
         : existing.startLocation,
     endLocation:
-      patch.endLocation !== undefined
-        ? patch.endLocation
+      fields.endLocation !== undefined
+        ? fields.endLocation
         : existing.endLocation,
-    notes: patch.notes !== undefined ? patch.notes : existing.notes,
+    notes: fields.notes !== undefined ? fields.notes : existing.notes,
     confirmationCode:
-      patch.confirmationCode !== undefined
-        ? patch.confirmationCode
+      fields.confirmationCode !== undefined
+        ? fields.confirmationCode
         : existing.confirmationCode,
     enrichment:
-      patch.enrichment !== undefined
-        ? patch.enrichment
+      fields.enrichment !== undefined
+        ? fields.enrichment
         : existing.enrichment,
   };
 
-  // Strip undefined optionals so JSON/Dynamo stay clean.
+  const details = fields.details ?? existing.details;
   const cleaned = stripUndefined(nextBase);
-
   return withTypeAndDetails(cleaned, existing.type, details);
 }
 
