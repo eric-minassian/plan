@@ -17,7 +17,6 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
-  ItemGroup,
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Spinner } from "@eric-minassian/design/components/spinner";
@@ -148,9 +147,17 @@ export function SharePanel(props: SharePanelProps) {
       <CardHeader className="border-b">
         <CardTitle>Share</CardTitle>
         <CardDescription>
-          Anyone with the link can view the full itinerary until it expires or
-          you revoke it. Opening another shared trip in this browser switches
-          the active share view.
+          Anyone with the link can view the{" "}
+          <strong className="font-medium text-foreground">
+            full itinerary
+          </strong>{" "}
+          (titles, times, notes, confirmation codes, locations) until the link
+          expires or you revoke it. No account required.{" "}
+          <strong className="font-medium text-foreground">
+            Opening another shared trip in this browser switches the active
+            share view
+          </strong>{" "}
+          (one share session cookie at a time).
         </CardDescription>
         <CardAction>
           <Button
@@ -246,7 +253,7 @@ export function SharePanel(props: SharePanelProps) {
         ) : null}
 
         {active.length > 0 ? (
-          <ItemGroup className="gap-2">
+          <div className="flex w-full flex-col gap-2">
             {active.map((share) => (
               <Item key={share.shareId} variant="outline" size="sm">
                 <ItemContent>
@@ -272,7 +279,7 @@ export function SharePanel(props: SharePanelProps) {
                 </ItemActions>
               </Item>
             ))}
-          </ItemGroup>
+          </div>
         ) : null}
       </CardContent>
     </Card>

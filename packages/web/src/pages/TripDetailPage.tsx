@@ -19,7 +19,6 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
-  ItemGroup,
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Separator } from "@eric-minassian/design/components/separator";
@@ -537,9 +536,9 @@ export function TripDetailPage() {
                           {formatCivilDateLabel(day.date)}
                         </span>
                       </div>
-                      <ItemGroup className="gap-2">
+                      <div className="flex w-full flex-col gap-2">
                         {day.items.map((item) => renderItemCard(item))}
-                      </ItemGroup>
+                      </div>
                     </div>
                   ))
                 : null}
@@ -557,9 +556,9 @@ export function TripDetailPage() {
                       No start time
                     </span>
                   </div>
-                  <ItemGroup className="gap-2">
+                  <div className="flex w-full flex-col gap-2">
                     {buckets.unscheduled.map((item) => renderItemCard(item))}
-                  </ItemGroup>
+                  </div>
                 </div>
               ) : null}
             </CardContent>

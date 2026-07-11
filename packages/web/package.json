@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@eric-minassian/design": "github:eric-minassian/design",
+    "@eric-minassian/design": "github:eric-minassian/design#5f47bdb925eabb588e718a25a747bdb0e8697bbf",
     "@ericminassian/auth": "^1.1.0",
     "@tripplan/domain": "workspace:*",
     "effect": "^3.21.4",

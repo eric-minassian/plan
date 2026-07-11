@@ -23,7 +23,6 @@ import {
   Item,
   ItemContent,
   ItemDescription,
-  ItemGroup,
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Spinner } from "@eric-minassian/design/components/spinner";
@@ -232,7 +231,7 @@ export function TripListPage() {
               </EmptyHeader>
             </Empty>
           ) : (
-            <ItemGroup className="gap-2">
+            <div className="flex w-full flex-col gap-2">
               {trips.map((trip) => (
                 <Item key={trip.tripId} variant="outline" asChild>
                   <Link
@@ -253,7 +252,7 @@ export function TripListPage() {
                   </Link>
                 </Item>
               ))}
-            </ItemGroup>
+            </div>
           )}
 
           {nextCursor !== undefined ? (

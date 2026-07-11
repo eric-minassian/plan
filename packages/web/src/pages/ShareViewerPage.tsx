@@ -18,7 +18,6 @@ import {
   Item,
   ItemContent,
   ItemDescription,
-  ItemGroup,
   ItemTitle,
 } from "@eric-minassian/design/components/item";
 import { Separator } from "@eric-minassian/design/components/separator";
@@ -31,6 +30,7 @@ import {
 } from "../api/client.ts";
 import { formatApiError } from "../api/errors.ts";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
+import { InfoAlert } from "../components/InfoAlert.tsx";
 import { bucketTripItems } from "../timeline/bucket.ts";
 import { formatCivilDateLabel } from "../timeline/datetime.ts";
 import {
@@ -146,6 +146,9 @@ export function ShareViewerPage() {
   const [trip, setTrip] = useState<ShareTripDTO | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [statusMessage, setStatusMessage] = useState<string | undefined>(
+    undefined,
+  );
   const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
@@ -159,9 +162,11 @@ export function ShareViewerPage() {
       if (result.ok) {
         setTrip(result.trip);
         setError(undefined);
+        setStatusMessage(undefined);
       } else {
         setTrip(undefined);
         setError(formatApiError(result.error));
+        setStatusMessage(undefined);
       }
       setLoading(false);
     });
@@ -181,10 +186,11 @@ export function ShareViewerPage() {
   async function handleLeave(): Promise<void> {
     setLeaving(true);
     setError(undefined);
+    setStatusMessage(undefined);
     try {
       await api.clearSession();
       setTrip(undefined);
-      setError("Share session cleared on this device.");
+      setStatusMessage("Share session cleared on this device.");
     } catch (cause) {
       setError(formatApiError(cause));
     } finally {
@@ -218,29 +224,25 @@ export function ShareViewerPage() {
     <div className="flex flex-col gap-5">
       <Card>
         <CardHeader className="border-b">
-          <div className="flex flex-col gap-1">
-            <Badge variant="outline" className="w-fit">
-              Shared trip · read-only
-            </Badge>
-            {trip !== undefined ? (
-              <>
-                <CardTitle className="text-base">{trip.title}</CardTitle>
-                <CardDescription className="flex flex-wrap gap-x-3 gap-y-0.5">
-                  <span>
-                    {trip.startDate} → {trip.endDate}
-                  </span>
-                  <span className="font-mono text-[0.7rem]">
-                    {trip.timezone}
-                  </span>
-                </CardDescription>
-                <p className="text-sm text-muted-foreground">
-                  Shared by {trip.ownerDisplayName}
-                </p>
-              </>
-            ) : (
-              <CardTitle className="text-base">Shared trip</CardTitle>
-            )}
-          </div>
+          <Badge variant="outline" className="w-fit">
+            Shared trip · read-only
+          </Badge>
+          <CardTitle className="text-base">
+            {trip !== undefined ? trip.title : "Shared trip"}
+          </CardTitle>
+          {trip !== undefined ? (
+            <CardDescription className="flex flex-col gap-1">
+              <span className="flex flex-wrap gap-x-3 gap-y-0.5">
+                <span>
+                  {trip.startDate} → {trip.endDate}
+                </span>
+                <span className="font-mono text-[0.7rem]">
+                  {trip.timezone}
+                </span>
+              </span>
+              <span>Shared by {trip.ownerDisplayName}</span>
+            </CardDescription>
+          ) : null}
           {trip !== undefined ? (
             <CardAction>
               <Button
@@ -275,6 +277,9 @@ export function ShareViewerPage() {
       ) : null}
 
       {error !== undefined ? <ErrorAlert>{error}</ErrorAlert> : null}
+      {statusMessage !== undefined ? (
+        <InfoAlert>{statusMessage}</InfoAlert>
+      ) : null}
 
       {trip !== undefined && !loading ? (
         <Card>
@@ -307,9 +312,9 @@ export function ShareViewerPage() {
                         {formatCivilDateLabel(day.date)}
                       </span>
                     </div>
-                    <ItemGroup className="gap-2">
+                    <div className="flex w-full flex-col gap-2">
                       {day.items.map((item) => renderItemCard(item))}
-                    </ItemGroup>
+                    </div>
                   </div>
                 ))
               : null}
@@ -327,9 +332,9 @@ export function ShareViewerPage() {
                     No start time
                   </span>
                 </div>
-                <ItemGroup className="gap-2">
+                <div className="flex w-full flex-col gap-2">
                   {buckets.unscheduled.map((item) => renderItemCard(item))}
-                </ItemGroup>
+                </div>
               </div>
             ) : null}
           </CardContent>
