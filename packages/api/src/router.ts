@@ -1,21 +1,37 @@
 import { Effect, Layer } from "effect";
 import { CurrentOwner } from "./auth/current-owner.js";
-import { CurrentShare } from "./auth/current-share.js";
 import { OwnerAuth, type OwnerAuthService } from "./auth/owner-auth.js";
 import {
-  makeShareAuth,
+  makeShareAuthStub,
   ShareAuth,
   SHARE_COOKIE_NAME,
   type ShareAuthService,
 } from "./auth/share-auth.js";
 import type { ApiConfig } from "./config.js";
 import {
+  makeInMemoryEnrichBudget,
+  DEFAULT_LIVE_FLIGHT_LOOKUP_COST_USD,
+} from "./enrichment/budget.js";
+import { createFlightProvider } from "./enrichment/create-flight-provider.js";
+import {
+  FlightProviderService,
+  type FlightProvider,
+} from "./enrichment/flight-provider.js";
+import {
+  EnrichmentGuards,
+  type EnrichmentGuardsService,
+} from "./enrichment/guards.js";
+import {
+  makeInMemoryEnrichRateLimiter,
+  DEFAULT_ENRICH_RATE_LIMIT_PER_HOUR,
+} from "./enrichment/rate-limit.js";
+import { makeMockFlightProvider } from "./enrichment/mock-flight-provider.js";
+import {
   AppError,
   appErrorToHttpResponse,
   unexpectedToAppError,
 } from "./errors/app-error.js";
 import { matchPath } from "./http/path-match.js";
-import { makeShareSessionRateLimiter } from "./http/rate-limit.js";
 import { RequestContext } from "./http/request-context.js";
 import type {
   AuthClass,
@@ -24,9 +40,9 @@ import type {
 } from "./http/types.js";
 import type { Logger } from "./logging/logger.js";
 import { consoleLogger } from "./logging/logger.js";
-import { ShareRepo, type ShareRepository } from "./repos/share-repo.js";
 import { TripRepo, type TripRepository } from "./repos/trip-repo.js";
 import { UserRepo, type UserRepository } from "./repos/user-repo.js";
+import { handleEnrichFlight } from "./routes/enrich.js";
 import { handleHealth } from "./routes/health.js";
 import { handleMe } from "./routes/me.js";
 import {
@@ -35,14 +51,6 @@ import {
   handlePatchItem,
   handleReorderItems,
 } from "./routes/items.js";
-import {
-  handleCreateShare,
-  handleCreateShareSession,
-  handleDeleteShareSession,
-  handleGetShareTrip,
-  handleListShares,
-  handleRevokeShare,
-} from "./routes/shares.js";
 import {
   handleCreateTrip,
   handleExportTrip,
@@ -58,10 +66,10 @@ export type RouteHandlerEnv =
   | ShareAuth
   | UserRepo
   | TripRepo
-  | ShareRepo
   | RequestContext
   | CurrentOwner
-  | CurrentShare;
+  | FlightProviderService
+  | EnrichmentGuards;
 
 export interface RouteDefinition {
   readonly method: string;
@@ -75,17 +83,10 @@ export interface RouteDefinition {
  * Build the route table. Delete respects `tripsDeleteEnabled`.
  */
 export function buildRoutes(
-  config: {
-    readonly tripsDeleteEnabled?: boolean;
-    readonly shareAllowedOrigins?: readonly string[];
-  } = {},
-  rateLimiter = makeShareSessionRateLimiter(),
+  config: Pick<ApiConfig, "tripsDeleteEnabled"> = {
+    tripsDeleteEnabled: true,
+  },
 ): readonly RouteDefinition[] {
-  const tripsDeleteEnabled = config.tripsDeleteEnabled ?? true;
-  const shareAllowedOrigins = config.shareAllowedOrigins ?? [];
-  const deleteConfig: Pick<ApiConfig, "tripsDeleteEnabled"> = {
-    tripsDeleteEnabled,
-  };
   return [
     {
       method: "GET",
@@ -116,25 +117,6 @@ export function buildRoutes(
       path: "/api/v1/trips/:tripId/export",
       authClass: "owner",
       handler: handleExportTrip,
-    },
-    // Share management (owner) before bare :tripId
-    {
-      method: "POST",
-      path: "/api/v1/trips/:tripId/shares",
-      authClass: "owner",
-      handler: handleCreateShare,
-    },
-    {
-      method: "GET",
-      path: "/api/v1/trips/:tripId/shares",
-      authClass: "owner",
-      handler: handleListShares,
-    },
-    {
-      method: "DELETE",
-      path: "/api/v1/trips/:tripId/shares/:shareId",
-      authClass: "owner",
-      handler: handleRevokeShare,
     },
     // Item routes before bare :tripId only where path length differs;
     // reorder is a static leaf under /items.
@@ -178,29 +160,13 @@ export function buildRoutes(
       method: "DELETE",
       path: "/api/v1/trips/:tripId",
       authClass: "owner",
-      handler: makeDeleteTripHandler(deleteConfig),
+      handler: makeDeleteTripHandler(config),
     },
-    // Public / share session routes
     {
       method: "POST",
-      path: "/api/v1/share/session",
-      authClass: "public",
-      handler: handleCreateShareSession({
-        rateLimiter,
-        allowedOrigins: shareAllowedOrigins,
-      }),
-    },
-    {
-      method: "DELETE",
-      path: "/api/v1/share/session",
-      authClass: "share",
-      handler: handleDeleteShareSession,
-    },
-    {
-      method: "GET",
-      path: "/api/v1/share/trip",
-      authClass: "share",
-      handler: handleGetShareTrip,
+      path: "/api/v1/enrich/flight",
+      authClass: "owner",
+      handler: handleEnrichFlight,
     },
   ];
 }
@@ -212,10 +178,47 @@ export interface RouterDeps {
   readonly ownerAuth: OwnerAuthService;
   readonly userRepo: UserRepository;
   readonly tripRepo: TripRepository;
-  readonly shareRepo?: ShareRepository;
   readonly shareAuth?: ShareAuthService;
   readonly logger?: Logger;
   readonly routes?: readonly RouteDefinition[];
+  /** Defaults to MockFlightProvider when omitted. */
+  readonly flightProvider?: FlightProvider;
+  /** Defaults to permissive in-memory guards when omitted. */
+  readonly enrichmentGuards?: EnrichmentGuardsService;
+}
+
+/** Default enrichment guards for unit tests / local (mock cost 0). */
+export function makeDefaultEnrichmentGuards(
+  config?: Pick<
+    ApiConfig,
+    | "enrichmentRateLimitPerHour"
+    | "enrichmentMonthlyBudgetUsd"
+    | "enrichmentLiveFlightCostUsd"
+  >,
+): EnrichmentGuardsService {
+  return {
+    rateLimiter: makeInMemoryEnrichRateLimiter(
+      config?.enrichmentRateLimitPerHour ?? DEFAULT_ENRICH_RATE_LIMIT_PER_HOUR,
+    ),
+    budget: makeInMemoryEnrichBudget(
+      config?.enrichmentMonthlyBudgetUsd ?? 25,
+    ),
+    liveLookupCostUsd:
+      config?.enrichmentLiveFlightCostUsd ?? DEFAULT_LIVE_FLIGHT_LOOKUP_COST_USD,
+  };
+}
+
+/**
+ * Build flight provider + guards from full API config (Lambda wiring).
+ */
+export function makeEnrichmentRuntime(config: ApiConfig): {
+  readonly flightProvider: FlightProvider;
+  readonly enrichmentGuards: EnrichmentGuardsService;
+} {
+  return {
+    flightProvider: createFlightProvider(config),
+    enrichmentGuards: makeDefaultEnrichmentGuards(config),
+  };
 }
 
 interface MatchedRoute {
@@ -250,7 +253,7 @@ function pathPatternMatches(
 /**
  * Dispatch a single HTTP request through the authz matrix + route handlers.
  * Owner/share credentials are verified **once** in the gate; handlers read
- * `CurrentOwner` / `CurrentShare` rather than re-verifying.
+ * `CurrentOwner` (or future share principal) rather than re-verifying.
  */
 export function handleRequest(
   request: HttpRequest,
@@ -297,27 +300,13 @@ export function handleRequest(
 
   const { route, pathParams } = matched;
 
-  const shareRepo =
-    deps.shareRepo ??
-    // Lazy default: empty in-memory if caller omitted (tests that don't need shares).
-    // Importing makeInMemoryShareRepo at top would create a cycle risk — keep inline factory below.
-    undefined;
-
-  // Resolve share repo once (prefer deps).
-  const resolvedShareRepo = shareRepo;
-
   const shareAuth: ShareAuthService =
     deps.shareAuth ??
-    (resolvedShareRepo !== undefined
-      ? makeShareAuth({
-          getCookie: () => request.cookies[SHARE_COOKIE_NAME],
-          shareRepo: resolvedShareRepo,
-          tripRepo: deps.tripRepo,
-        })
-      : {
-          requireShare: () =>
-            Effect.fail(AppError.unauthorized("Share session required")),
-        });
+    makeShareAuthStub(() => request.cookies[SHARE_COOKIE_NAME]);
+
+  const flightProvider = deps.flightProvider ?? makeMockFlightProvider();
+  const enrichmentGuards =
+    deps.enrichmentGuards ?? makeDefaultEnrichmentGuards();
 
   const requestLayer = Layer.succeed(RequestContext, {
     request,
@@ -328,30 +317,16 @@ export function handleRequest(
   const shareLayer = Layer.succeed(ShareAuth, shareAuth);
   const userLayer = Layer.succeed(UserRepo, deps.userRepo);
   const tripLayer = Layer.succeed(TripRepo, deps.tripRepo);
-
-  // ShareRepo layer: only when provided (share routes need it).
-  // Use a no-op stub when missing so Layer.mergeAll stays typed.
-  const shareRepoService: ShareRepository =
-    resolvedShareRepo ??
-    ({
-      createGrant: () => Effect.fail(AppError.internal()),
-      listGrants: () => Effect.fail(AppError.internal()),
-      getGrant: () => Effect.fail(AppError.internal()),
-      findGrantByTokenHash: () => Effect.fail(AppError.internal()),
-      revokeGrant: () => Effect.fail(AppError.internal()),
-      createSession: () => Effect.fail(AppError.internal()),
-      getSession: () => Effect.fail(AppError.internal()),
-      deleteSession: () => Effect.fail(AppError.internal()),
-    } satisfies ShareRepository);
-  const shareRepoLayer = Layer.succeed(ShareRepo, shareRepoService);
-
+  const flightLayer = Layer.succeed(FlightProviderService, flightProvider);
+  const enrichGuardsLayer = Layer.succeed(EnrichmentGuards, enrichmentGuards);
   const appLayer = Layer.mergeAll(
     requestLayer,
     ownerLayer,
     shareLayer,
     userLayer,
     tripLayer,
-    shareRepoLayer,
+    flightLayer,
+    enrichGuardsLayer,
   );
 
   type CoreEnv =
@@ -359,36 +334,26 @@ export function handleRequest(
     | ShareAuth
     | UserRepo
     | TripRepo
-    | ShareRepo
-    | RequestContext;
+    | RequestContext
+    | FlightProviderService
+    | EnrichmentGuards;
 
-  const program: Effect.Effect<HttpResponse> = Effect.gen(function* () {
+  const program = Effect.gen(function* () {
     // Auth class gate: verify once, inject principal for the handler.
     if (route.authClass === "owner") {
       const auth = yield* OwnerAuth;
       const principal = yield* auth.requireOwner();
-      const ownerHandler = route.handler() as Effect.Effect<
-        HttpResponse,
-        AppError,
-        CoreEnv | CurrentOwner
-      >;
+      const ownerHandler: Effect.Effect<HttpResponse, AppError, RouteHandlerEnv> =
+        route.handler();
       return yield* ownerHandler.pipe(
         Effect.provideService(CurrentOwner, principal),
       );
     }
     if (route.authClass === "share") {
       const auth = yield* ShareAuth;
-      const principal = yield* auth.requireShare();
-      const shareHandler = route.handler() as Effect.Effect<
-        HttpResponse,
-        AppError,
-        CoreEnv | CurrentShare
-      >;
-      return yield* shareHandler.pipe(
-        Effect.provideService(CurrentShare, principal),
-      );
+      yield* auth.requireShare();
     }
-    // Public handlers do not read CurrentOwner / CurrentShare.
+    // Public / share handlers do not read CurrentOwner.
     const coreHandler = route.handler() as Effect.Effect<
       HttpResponse,
       AppError,

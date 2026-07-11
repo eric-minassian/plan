@@ -97,6 +97,34 @@ describe("formatApiError", () => {
     expect(formatApiError(err)).toContain("request x");
   });
 
+  it("surfaces AmbiguousEnrichment candidates", () => {
+    const err = new ApiClientError(422, {
+      type: "AmbiguousEnrichment",
+      message: "Multiple matching flights",
+      retryable: false,
+      requestId: "amb",
+      details: {
+        candidates: [
+          {
+            airlineCode: "UA",
+            flightNumber: "1",
+            departureAirport: "SFO",
+            arrivalAirport: "EWR",
+          },
+          {
+            airlineCode: "UA",
+            flightNumber: "1",
+            departureAirport: "LAX",
+            arrivalAirport: "EWR",
+          },
+        ],
+      },
+    });
+    const text = formatApiError(err);
+    expect(text).toContain("SFO→EWR");
+    expect(text).toContain("LAX→EWR");
+  });
+
   it("falls back for plain Error", () => {
     expect(formatApiError(new Error("boom"))).toBe("boom");
   });
