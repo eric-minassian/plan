@@ -24,16 +24,31 @@ export interface ApiConfig {
    */
   readonly tripsDeleteEnabled: boolean;
   /**
-   * SQS queue URL for async trip cascade delete.
-   * Env: `TRIP_DELETE_QUEUE_URL`. When unset, API uses an in-memory queue
-   * (local/unit tests only — production always sets this via ApiStack).
-   */
-  readonly tripDeleteQueueUrl: string | undefined;
-  /**
    * Allowed browser Origins for POST /share/session.
    * Derived from PUBLIC_API_BASE_URL plus common Vite dev origins.
    */
   readonly shareAllowedOrigins: readonly string[];
+  /**
+   * When true, flight enrichment uses AeroDataBox (live). Default false → mock.
+   * Env: `ENRICHMENT_FLIGHT_LIVE` (design flag `enrichment.flight.live`).
+   */
+  readonly enrichmentFlightLive: boolean;
+  /**
+   * Max enrich API calls per owner per rolling hour. Default 60.
+   * Env: `ENRICHMENT_RATE_LIMIT_PER_HOUR`.
+   */
+  readonly enrichmentRateLimitPerHour: number;
+  /**
+   * Monthly USD hard cap for live enrichment spend. When exceeded, live
+   * lookups return UpstreamUnavailable without calling the vendor.
+   * Env: `ENRICHMENT_MONTHLY_BUDGET_USD` (default 25).
+   */
+  readonly enrichmentMonthlyBudgetUsd: number;
+  /**
+   * Estimated USD charged per live flight lookup against the monthly budget.
+   * Env: `ENRICHMENT_LIVE_FLIGHT_COST_USD` (default 0.01).
+   */
+  readonly enrichmentLiveFlightCostUsd: number;
 }
 
 export function loadConfig(
@@ -45,7 +60,6 @@ export function loadConfig(
       ? rawBase.replace(/\/$/, "")
       : undefined;
   const rawBucket = env.DOCS_BUCKET_NAME?.trim();
-  const rawQueue = env.TRIP_DELETE_QUEUE_URL?.trim();
   return {
     stage: env.STAGE ?? "dev",
     tableName: env.TABLE_NAME,
@@ -56,9 +70,20 @@ export function loadConfig(
     authAudience: env.AUTH_AUDIENCE ?? "plan",
     publicApiBaseUrl,
     tripsDeleteEnabled: parseBoolFlag(env.TRIPS_DELETE_ENABLED, true),
-    tripDeleteQueueUrl:
-      rawQueue !== undefined && rawQueue.length > 0 ? rawQueue : undefined,
     shareAllowedOrigins: buildShareAllowedOrigins(publicApiBaseUrl, env.STAGE),
+    enrichmentFlightLive: parseBoolFlag(env.ENRICHMENT_FLIGHT_LIVE, false),
+    enrichmentRateLimitPerHour: parsePositiveInt(
+      env.ENRICHMENT_RATE_LIMIT_PER_HOUR,
+      60,
+    ),
+    enrichmentMonthlyBudgetUsd: parseNonNegativeNumber(
+      env.ENRICHMENT_MONTHLY_BUDGET_USD,
+      25,
+    ),
+    enrichmentLiveFlightCostUsd: parseNonNegativeNumber(
+      env.ENRICHMENT_LIVE_FLIGHT_COST_USD,
+      0.01,
+    ),
   };
 }
 
@@ -96,4 +121,29 @@ function parseBoolFlag(
     return false;
   }
   return defaultValue;
+}
+
+function parsePositiveInt(raw: string | undefined, defaultValue: number): number {
+  if (raw === undefined || raw.trim().length === 0) {
+    return defaultValue;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    return defaultValue;
+  }
+  return n;
+}
+
+function parseNonNegativeNumber(
+  raw: string | undefined,
+  defaultValue: number,
+): number {
+  if (raw === undefined || raw.trim().length === 0) {
+    return defaultValue;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    return defaultValue;
+  }
+  return n;
 }

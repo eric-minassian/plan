@@ -498,6 +498,7 @@ export function TripDetailPage() {
                   onCancel={closeEditor}
                   onCreate={handleCreate}
                   onUpdate={handleUpdate}
+                  onEnrichFlight={(query) => api.enrichFlight(query)}
                 />
               </div>
             ) : null}

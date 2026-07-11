@@ -10,6 +10,24 @@ import {
 } from "./auth/share-auth.js";
 import type { ApiConfig } from "./config.js";
 import {
+  makeInMemoryEnrichBudget,
+  DEFAULT_LIVE_FLIGHT_LOOKUP_COST_USD,
+} from "./enrichment/budget.js";
+import { createFlightProvider } from "./enrichment/create-flight-provider.js";
+import {
+  FlightProviderService,
+  type FlightProvider,
+} from "./enrichment/flight-provider.js";
+import {
+  EnrichmentGuards,
+  type EnrichmentGuardsService,
+} from "./enrichment/guards.js";
+import {
+  makeInMemoryEnrichRateLimiter,
+  DEFAULT_ENRICH_RATE_LIMIT_PER_HOUR,
+} from "./enrichment/rate-limit.js";
+import { makeMockFlightProvider } from "./enrichment/mock-flight-provider.js";
+import {
   AppError,
   appErrorToHttpResponse,
   unexpectedToAppError,
@@ -45,13 +63,9 @@ import {
   handlePresignAttachment,
   handleShareAttachmentUrl,
 } from "./routes/attachments.js";
+import { handleEnrichFlight } from "./routes/enrich.js";
 import { handleHealth } from "./routes/health.js";
-import { handleDeleteMe, handleMe } from "./routes/me.js";
-import {
-  makeInMemoryTripDeleteQueue,
-  TripDeleteQueue,
-  type TripDeleteQueueService,
-} from "./sqs/trip-delete-queue.js";
+import { handleMe } from "./routes/me.js";
 import {
   handleCreateItem,
   handleDeleteItem,
@@ -84,10 +98,11 @@ export type RouteHandlerEnv =
   | ShareRepo
   | AttachmentRepo
   | DocsStore
-  | TripDeleteQueue
   | RequestContext
   | CurrentOwner
-  | CurrentShare;
+  | CurrentShare
+  | FlightProviderService
+  | EnrichmentGuards;
 
 export interface RouteDefinition {
   readonly method: string;
@@ -124,12 +139,6 @@ export function buildRoutes(
       path: "/api/v1/me",
       authClass: "owner",
       handler: handleMe,
-    },
-    {
-      method: "DELETE",
-      path: "/api/v1/me",
-      authClass: "owner",
-      handler: handleDeleteMe,
     },
     {
       method: "POST",
@@ -271,6 +280,12 @@ export function buildRoutes(
       authClass: "share",
       handler: handleShareAttachmentUrl,
     },
+    {
+      method: "POST",
+      path: "/api/v1/enrich/flight",
+      authClass: "owner",
+      handler: handleEnrichFlight,
+    },
   ];
 }
 
@@ -284,10 +299,47 @@ export interface RouterDeps {
   readonly shareRepo?: ShareRepository;
   readonly attachmentRepo?: AttachmentRepository;
   readonly docsStore?: DocsStoreService;
-  readonly tripDeleteQueue?: TripDeleteQueueService;
   readonly shareAuth?: ShareAuthService;
   readonly logger?: Logger;
   readonly routes?: readonly RouteDefinition[];
+  /** Defaults to MockFlightProvider when omitted. */
+  readonly flightProvider?: FlightProvider;
+  /** Defaults to permissive in-memory guards when omitted. */
+  readonly enrichmentGuards?: EnrichmentGuardsService;
+}
+
+/** Default enrichment guards for unit tests / local (mock cost 0). */
+export function makeDefaultEnrichmentGuards(
+  config?: Pick<
+    ApiConfig,
+    | "enrichmentRateLimitPerHour"
+    | "enrichmentMonthlyBudgetUsd"
+    | "enrichmentLiveFlightCostUsd"
+  >,
+): EnrichmentGuardsService {
+  return {
+    rateLimiter: makeInMemoryEnrichRateLimiter(
+      config?.enrichmentRateLimitPerHour ?? DEFAULT_ENRICH_RATE_LIMIT_PER_HOUR,
+    ),
+    budget: makeInMemoryEnrichBudget(
+      config?.enrichmentMonthlyBudgetUsd ?? 25,
+    ),
+    liveLookupCostUsd:
+      config?.enrichmentLiveFlightCostUsd ?? DEFAULT_LIVE_FLIGHT_LOOKUP_COST_USD,
+  };
+}
+
+/**
+ * Build flight provider + guards from full API config (Lambda wiring).
+ */
+export function makeEnrichmentRuntime(config: ApiConfig): {
+  readonly flightProvider: FlightProvider;
+  readonly enrichmentGuards: EnrichmentGuardsService;
+} {
+  return {
+    flightProvider: createFlightProvider(config),
+    enrichmentGuards: makeDefaultEnrichmentGuards(config),
+  };
 }
 
 interface MatchedRoute {
@@ -398,6 +450,10 @@ export function handleRequest(
             Effect.fail(AppError.unauthorized("Share session required")),
         });
 
+  const flightProvider = deps.flightProvider ?? makeMockFlightProvider();
+  const enrichmentGuards =
+    deps.enrichmentGuards ?? makeDefaultEnrichmentGuards();
+
   const requestLayer = Layer.succeed(RequestContext, {
     request,
     authClass: route.authClass,
@@ -428,13 +484,8 @@ export function handleRequest(
     attachmentRepoService,
   );
   const docsStoreLayer = Layer.succeed(DocsStore, docsStoreService);
-  const tripDeleteQueueService: TripDeleteQueueService =
-    deps.tripDeleteQueue ?? makeInMemoryTripDeleteQueue();
-  const tripDeleteQueueLayer = Layer.succeed(
-    TripDeleteQueue,
-    tripDeleteQueueService,
-  );
-
+  const flightLayer = Layer.succeed(FlightProviderService, flightProvider);
+  const enrichGuardsLayer = Layer.succeed(EnrichmentGuards, enrichmentGuards);
   const appLayer = Layer.mergeAll(
     requestLayer,
     ownerLayer,
@@ -444,7 +495,8 @@ export function handleRequest(
     shareRepoLayer,
     attachmentRepoLayer,
     docsStoreLayer,
-    tripDeleteQueueLayer,
+    flightLayer,
+    enrichGuardsLayer,
   );
 
   type CoreEnv =
@@ -455,8 +507,9 @@ export function handleRequest(
     | ShareRepo
     | AttachmentRepo
     | DocsStore
-    | TripDeleteQueue
-    | RequestContext;
+    | RequestContext
+    | FlightProviderService
+    | EnrichmentGuards;
 
   const program: Effect.Effect<HttpResponse> = Effect.gen(function* () {
     // Auth class gate: verify once, inject principal for the handler.

@@ -2,6 +2,7 @@ import {
   CreateItineraryItem,
   CreateShareResponse,
   CreateTrip,
+  FlightEnrichmentResponse,
   ItineraryItem,
   ShareListResponse,
   ShareTripDTO,
@@ -10,6 +11,7 @@ import {
   type CreateItineraryItem as CreateItineraryItemInput,
   type CreateShareResponse as CreateShareResponseType,
   type CreateTrip as CreateTripInput,
+  type FlightEnrichmentResponse as FlightEnrichmentResponseType,
   type ItineraryItem as ItineraryItemType,
   type ShareListResponse as ShareListResponseType,
   type ShareTripDTO as ShareTripDTOType,
@@ -177,6 +179,22 @@ export function decodeShareTripResponse(
       status,
       undefined,
       `Invalid share trip response: ${schemaIssues(decoded.left)}`,
+    );
+  }
+  return decoded.right;
+}
+
+/** Decode flight enrichment DTO (found / cancelled / not_found). */
+export function decodeFlightEnrichmentResponse(
+  json: unknown,
+  status: number,
+): FlightEnrichmentResponseType {
+  const decoded = S.decodeUnknownEither(FlightEnrichmentResponse)(json);
+  if (Either.isLeft(decoded)) {
+    throw new ApiClientError(
+      status,
+      undefined,
+      `Invalid flight enrichment response: ${schemaIssues(decoded.left)}`,
     );
   }
   return decoded.right;

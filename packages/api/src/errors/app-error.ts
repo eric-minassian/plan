@@ -67,11 +67,39 @@ export class AppError extends Data.TaggedError("AppError")<{
     return new AppError({ type: ErrorCode.Gone, message });
   }
 
-  static rateLimited(message = "Too many requests"): AppError {
+  static rateLimited(
+    message = "Too many requests",
+    details?: unknown,
+  ): AppError {
     return new AppError({
       type: ErrorCode.RateLimited,
       message,
+      details,
       retryable: true,
+    });
+  }
+
+  static upstreamUnavailable(
+    message = "Upstream service unavailable",
+    details?: unknown,
+  ): AppError {
+    return new AppError({
+      type: ErrorCode.UpstreamUnavailable,
+      message,
+      details,
+      retryable: true,
+    });
+  }
+
+  static ambiguousEnrichment(
+    message: string,
+    details?: unknown,
+  ): AppError {
+    return new AppError({
+      type: ErrorCode.AmbiguousEnrichment,
+      message,
+      details,
+      retryable: false,
     });
   }
 

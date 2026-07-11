@@ -8,7 +8,7 @@ AWS CDK (v2) infrastructure for TripPlan. **All stacks deploy to `us-east-1`.**
 |-------|------------|----------|
 | **FoundationStack** | `TripPlan-Foundation-{stage}` | CloudWatch log retention defaults; Secrets Manager placeholders (AeroDataBox, MapTiler server key) |
 | **DataStack** | `TripPlan-Data-{stage}` | DynamoDB single-table `TripPlan-{stage}` with GSI1–4 + TTL; S3 documents bucket (SSE-S3, CORS, lifecycle) |
-| **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; trip-delete SQS queue + DLQ (visibility 5m) + cascade worker; CW alarm `tripplan-{stage}-delete-dlq-depth`; env `TABLE_NAME` / `DOCS_BUCKET_NAME` / `TRIP_DELETE_QUEUE_URL` / `AUTH_*` / `STAGE` / `PUBLIC_API_BASE_URL`. Routes: health, me (GET+DELETE stub), trips/shares/items/attachments via proxy. **Profile store is still in-memory** until Dynamo `UserRepository` lands. CORS: prod/staging SPA host only; localhost only on dev. |
+| **ApiStack** | `TripPlan-Api-{stage}` | Node 22 ARM64 Lambda + HTTP API; routes `GET /api/v1/health` (public), `GET /api/v1/me` (owner JWT in-Lambda); env `TABLE_NAME` / `AUTH_ISSUER` / `AUTH_AUDIENCE` / `STAGE` / `PUBLIC_API_BASE_URL` (prod/staging). **Profile store is still in-memory** until Dynamo `UserRepository` lands — table R/W grant is preparatory. CORS: prod/staging SPA host only; localhost only on dev. |
 | **WebStack** | `TripPlan-Web-{stage}` | Private SPA S3 bucket + CloudFront (OAC); default SPA (403/404 → `/index.html`); `/api/*` → API Gateway HTTP API; CSP response headers; runtime `/config.json`; optional custom domain + Route53 |
 
 **Later:** ObservabilityStack.  
@@ -224,14 +224,6 @@ aws secretsmanager put-secret-value \
 2. DDB row `status: pending` with TTL ~24h.
 3. On confirm: HeadObject checks, set DDB `status: ready`, **clear** the `pending` object tag (so lifecycle will not delete confirmed files).
 4. Abandoned uploads: DDB TTL drops metadata; S3 lifecycle deletes tagged objects after 1 day. Trip delete worker still lists `trips/{tripId}/` for cascade safety.
-
-### Trip-delete cascade (PR 15)
-
-- Queue: `tripplan-trip-delete-{stage}` (visibility 5m) → worker Lambda (timeout 4m)
-- DLQ: `tripplan-trip-delete-dlq-{stage}`; alarm `tripplan-{stage}-delete-dlq-depth` when visible messages ≥ 1
-- API exports `deleteDlq` for ObservabilityStack dashboards
-- **Pre-PR15 migrate (dogfood):** see `packages/api/src/workers/migrate-deleted-trips.ts` header — set `TABLE_NAME` + `TRIP_DELETE_QUEUE_URL`, run `listDeletedTripCandidates` + `enqueueCascadeForCandidates`
-- **Enqueue failure after DELETE:** trip is already `deleting`; client should retry DELETE (`details.recovery=retry_delete`)
 
 ## OIDC client registration (companion — not TripPlan CDK)
 

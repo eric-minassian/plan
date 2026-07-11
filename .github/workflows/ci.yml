@@ -39,3 +39,68 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+  # Optional e2e (share smoke + critical path). Gate before checkout/install so
+  # missing secrets are a cheap no-op. E2E_BASE_URL is optional (defaults to staging).
+  # Critical path needs E2E_OWNER_ACCESS_TOKEN; share smoke accepts share token or owner.
+  # See packages/e2e/README.md.
+  e2e-smoke:
+    name: E2E smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Gate on credentials
+        id: gate
+        env:
+          E2E_SHARE_TOKEN: ${{ secrets.E2E_SHARE_TOKEN }}
+          E2E_OWNER_ACCESS_TOKEN: ${{ secrets.E2E_OWNER_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Mirror packages/e2e trim: whitespace-only secrets are treated as unset.
+          trim() {
+            # shellcheck disable=SC2001
+            printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          }
+          share="$(trim "${E2E_SHARE_TOKEN:-}")"
+          owner="$(trim "${E2E_OWNER_ACCESS_TOKEN:-}")"
+          if [ -z "$share" ] && [ -z "$owner" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Neither E2E_SHARE_TOKEN nor E2E_OWNER_ACCESS_TOKEN set (after trim) — skipping Playwright e2e (no install)."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "E2E credentials present — proceeding."
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.run == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run e2e critical paths
+        if: steps.gate.outputs.run == 'true'
+        env:
+          # Optional — package defaults to plan-staging.ericminassian.com
+          E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+          E2E_SHARE_TOKEN: ${{ secrets.E2E_SHARE_TOKEN }}
+          E2E_SHARE_TRIP_TITLE: ${{ secrets.E2E_SHARE_TRIP_TITLE }}
+          E2E_OWNER_ACCESS_TOKEN: ${{ secrets.E2E_OWNER_ACCESS_TOKEN }}
+          E2E_REQUIRE_ATTACHMENT_UPLOAD: ${{ secrets.E2E_REQUIRE_ATTACHMENT_UPLOAD }}
+        run: |
+          set -euo pipefail
+          pnpm --filter @tripplan/e2e exec playwright install --with-deps chromium
+          pnpm --filter @tripplan/e2e test:e2e
