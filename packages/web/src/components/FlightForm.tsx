@@ -8,7 +8,7 @@ import {
   FieldSet,
 } from "@eric-minassian/design/components/field";
 import { Input } from "@eric-minassian/design/components/input";
-import { Spinner } from "@eric-minassian/design/components/spinner";
+import { BusyIcon } from "./BusyIcon.tsx";
 import { Textarea } from "@eric-minassian/design/components/textarea";
 import type {
   CreateItineraryItem,
@@ -574,7 +574,7 @@ export function FlightForm(props: FlightFormProps) {
               >
                 {lookupBusy ? (
                   <>
-                    <Spinner data-icon="inline-start" />
+                    <BusyIcon data-icon="inline-start" />
                     Looking up…
                   </>
                 ) : (
@@ -791,7 +791,7 @@ export function FlightForm(props: FlightFormProps) {
         <Button type="submit" disabled={busy}>
           {submitting ? (
             <>
-              <Spinner data-icon="inline-start" />
+              <BusyIcon data-icon="inline-start" />
               Saving…
             </>
           ) : mode.kind === "create" ? (
