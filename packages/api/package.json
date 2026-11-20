@@ -23,7 +23,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1085.0",
     "@ericminassian/auth": "^1.1.0",
     "@tripplan/domain": "workspace:*",
-    "effect": "^3.21.4"
+    "effect": "^3.22.1"
   },
   "devDependencies": {
     "@tripplan/eslint-config": "workspace:*",

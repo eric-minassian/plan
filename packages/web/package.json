@@ -16,7 +16,7 @@
     "@eric-minassian/design": "github:eric-minassian/design#5f47bdb925eabb588e718a25a747bdb0e8697bbf",
     "@ericminassian/auth": "^1.1.0",
     "@tripplan/domain": "workspace:*",
-    "effect": "^3.21.4",
+    "effect": "^3.22.1",
     "lucide-react": "^1.24.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
